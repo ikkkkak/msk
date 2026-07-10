@@ -1,0 +1,496 @@
+{
+  "listing": {
+    "common": {
+      "back": "Retour",
+      "noResults": "Aucun résultat",
+      "ok": "OK",
+      "required": "Obligatoire",
+      "search": "Rechercher…",
+      "notSet": "Non renseigné",
+      "optional": "Facultatif",
+      "papersSectionTitle": "Documents juridiques",
+      "bathroomsShort": "{{count}} sdb",
+      "bedroomsShort": "{{count}} ch",
+      "papersSectionSubtitle": "Téléversez les titres fonciers et documents justificatifs.",
+      "continue": "Continuer",
+      "errorTitle": "Erreur",
+      "genericError": "Une erreur s'est produite. Veuillez réessayer.",
+      "invalidServerJson": "La réponse du serveur n'a pas pu être analysée (JSON invalide).",
+      "mediaRequired": "Veuillez ajouter au moins une photo ou une vidéo pour publier",
+      "minCharsHint": "Au moins {{count}} caractères",
+      "mustBeLoggedIn": "Vous devez être connecté",
+      "next": "Suivant",
+      "nextStepPrefix": "Suivant :",
+      "notInterested": "Pas intéressé",
+      "optionalRecommended": "Facultatif, mais recommandé",
+      "publish": "Publier",
+      "stepOf": "Étape {{current}}/{{total}}",
+      "stepsLeft": "{{count}} restante(s)",
+      "successTitle": "Succès",
+      "suggestedTemplates": "Suggestions",
+      "template": {
+        "areaLine": "Surface : {{area}}",
+        "familyTitle": "Adapté aux familles",
+        "investTitle": "Investissement",
+        "locationLine": "Emplacement : {{place}}",
+        "nearLine": "À proximité : {{place}}",
+        "priceLine": "Prix : {{price}}",
+        "shortTitle": "Court"
+      }
+    },
+    "landmark": {
+      "steps": {
+        "plotNumber": {
+          "hint": "Saisissez le numéro exact de parcelle figurant sur votre titre foncier. Nous le recouperons précisément au cadastre de votre secteur.",
+          "placeholder": "ex. 502",
+          "title": "Saisissez votre numéro de parcelle",
+          "subtitle": "Utilisez le numéro exact indiqué sur vos documents"
+        },
+        "papers": {
+          "otherPlaceholder": "Ajouter un autre titre de document (facultatif)",
+          "subtitle": "Sélectionnez les documents juridiques disponibles pour renforcer la confiance et limiter la fraude",
+          "title": "Documents fonciers",
+          "addPapers": "Téléverser les documents",
+          "cropHint": "Vous pouvez recadrer chaque document après sélection. Appuyez sur l'icône de recadrage pour ajuster.",
+          "hint": "Exemple : Titre foncier, Quitance, Lettre.",
+          "skip": "Passer pour l'instant — continuer sans documents",
+          "subtitleOptional": "Facultatif — téléversez vos documents pour paraître plus crédible et mieux vous classer dans les recherches",
+          "tapToUpload": "Appuyez pour sélectionner depuis votre appareil",
+          "uploading": "Téléversement…",
+          "why": "Téléversez tout document relatif à ce bien. Cela nous aide à diffuser votre annonce plus souvent et peut mener à un badge vérifié après contrôle."
+        },
+        "review": {
+          "papersLabel": "Documents fonciers",
+          "areaLabel": "Surface",
+          "editAnytime": "Vous pouvez modifier votre annonce à tout moment après publication",
+          "locationLabel": "Emplacement",
+          "mapDone": "Emplacement indiqué sur la carte",
+          "mapLabel": "Carte",
+          "mapNotMarked": "Non indiqué",
+          "mediaLabel": "Photos et vidéo",
+          "noMediaUploaded": "Aucune photo ou vidéo téléversée",
+          "noPapersUploaded": "Aucun document téléversé",
+          "photosValue": "{{count}} photo(s)",
+          "plotCadastreMatched": "Correspondance cadastrale",
+          "plotChip": "Parcelle {{number}}",
+          "plotConfirmedNoMatch": "Confirmé (introuvable au cadastre)",
+          "plotLabel": "Numéro de parcelle",
+          "plotNotConfirmed": "Pas encore confirmé",
+          "priceLabel": "Prix",
+          "privateNoteHint": "Non visible par les visiteurs. Rappel facultatif pour cette annonce.",
+          "privateNoteLabel": "Note privée (vous et votre agence uniquement)",
+          "privateNotePlaceholder": "ex. référence interne, contexte acheteur…",
+          "titleLabel": "Titre"
+        },
+        "area": {
+          "hint": "Saisissez la surface totale en mètres carrés",
+          "placeholder": "1000",
+          "subtitle": "Soyez aussi précis que possible",
+          "title": "Quelle est la surface de votre bien ?"
+        },
+        "city": {
+          "subtitle": "Commencez par la ville",
+          "title": "Où se situe votre bien ?"
+        },
+        "description": {
+          "hint": "Facultatif, mais utile pour attirer des acheteurs sérieux",
+          "placeholder": "Décrivez l'emplacement, les caractéristiques et les usages possibles…",
+          "subtitle": "Que doivent savoir les acheteurs sur ce terrain ?",
+          "title": "Décrivez votre bien"
+        },
+        "intro": {
+          "body": "Proposez votre terrain aux acheteurs en quelques étapes simples.",
+          "headline": "Mettez votre terrain en vente",
+          "subtitle": "Nous vous accompagnons pour publier votre bien en quelques étapes",
+          "title": "Commençons"
+        },
+        "landType": {
+          "skipHint": "Facultatif — passer si non applicable",
+          "subtitle": "Cela aide les acheteurs à trouver votre annonce",
+          "title": "Quel type de terrain est-ce ?"
+        },
+        "map": {
+          "zone": "Zone"
+        },
+        "photos": {
+          "addPhotos": "Ajouter des photos",
+          "cover": "Couverture",
+          "mp4Hint": "mp4 recommandé",
+          "orVideo": "Ou ajouter une vidéo",
+          "pleaseWait": "Veuillez patienter",
+          "subtitle": "Au moins une photo ou une vidéo est requise",
+          "tapToUpload": "Appuyez pour téléverser depuis votre appareil",
+          "tips": "Ajoutez au moins 5 photos sous différents angles pour de meilleurs résultats",
+          "title": "Ajoutez des photos ou une vidéo",
+          "uploading": "Téléversement…",
+          "video": "Vidéo"
+        },
+        "plotVerify": {
+          "checking": "Vérification…",
+          "confirmQuestion": "Est-ce votre parcelle ?",
+          "editPlot": "Modifier les détails de la parcelle",
+          "editSector": "Changer de secteur",
+          "noEdit": "Non, modifier",
+          "notFound": "Nous n'avons pas trouvé cette parcelle dans notre cadastre pour le secteur sélectionné.",
+          "notFoundDetail": "Aucune parcelle n°{{plot}} trouvée au cadastre pour ce secteur.",
+          "sectorNotInCadastre": "Ce secteur n'est pas encore relié aux données cadastrales. Essayez un autre secteur ou contactez le support.",
+          "subtitle": "Nous allons la rechercher dans nos données cadastrales",
+          "sureInfoTitle": "Confirmez-vous que les informations ci-dessous sont correctes ?",
+          "title": "Est-ce votre parcelle ?",
+          "yesProceed": "Oui, continuer",
+          "yesSureProceed": "Oui, continuer",
+          "city": "Ville",
+          "zone": "Zone",
+          "quartier": "Quartier"
+        },
+        "price": {
+          "hint": "Étudiez les biens similaires à proximité pour fixer un prix compétitif",
+          "placeholder": "5000000",
+          "subtitle": "Tenez compte des prix pratiqués dans votre secteur",
+          "title": "Fixez votre prix de vente"
+        },
+        "quartier": {
+          "cadastreLinked": "Relié au cadastre",
+          "searchPlaceholder": "Rechercher quartiers / secteurs…",
+          "selectZoneFirst": "Veuillez d'abord sélectionner une zone",
+          "subtitle": "Précisez davantage l'emplacement",
+          "title": "Quel quartier ?"
+        },
+        "title": {
+          "hint": "Choisissez un titre clair et descriptif",
+          "placeholder": "ex. Terrain commercial premium en centre-ville",
+          "subtitle": "Cela aide les acheteurs à comprendre ce qui rend votre terrain attractif",
+          "title": "Donnez un titre à votre bien"
+        },
+        "verifyDetails": {
+          "subtitle": "Dernière vérification avant publication",
+          "title": "Vérifier les détails"
+        },
+        "zone": {
+          "cadastreLinked": "Relié au cadastre",
+          "searchPlaceholder": "Rechercher des zones…",
+          "selectCityFirst": "Veuillez d'abord sélectionner une ville",
+          "subtitle": "Aidez les acheteurs à affiner la localisation",
+          "title": "Quelle zone ?"
+        }
+      },
+      "landType": {
+        "residential": "Résidentiel",
+        "commercial": "Commercial",
+        "agricultural": "Agricole",
+        "industrial": "Industriel",
+        "mixed": "Usage mixte",
+        "other": "Autre"
+      },
+      "alerts": {
+        "error": "Erreur",
+        "uploadFailed": "Échec du téléversement",
+        "couldNotReadImage": "Impossible de lire le fichier image",
+        "createFailed": "Échec de la création de l'annonce. Veuillez réessayer.",
+        "locationRequired": "Veuillez renseigner la ville, la zone, le secteur et le numéro de parcelle.",
+        "mustLogin": "Vous devez être connecté pour publier un bien.",
+        "pickVideoFailed": "Impossible de sélectionner la vidéo. Veuillez réessayer.",
+        "plotMustBeConfirmed": "Veuillez confirmer la parcelle avant de publier.",
+        "signInToUpload": "Veuillez vous connecter pour téléverser des images.",
+        "successBody": "Votre bien a été publié avec succès !",
+        "successTitle": "Succès",
+        "uploadVideoFailed": "Échec du téléversement de la vidéo. Veuillez réessayer."
+      },
+      "template": {
+        "detailBody": "Demandes sérieuses bienvenues. Documents et visites peuvent être organisés.",
+        "detailTitle": "Détaillé",
+        "investBody": "Fort potentiel dans ce secteur pour développement ou placement à long terme."
+      },
+      "verify": {
+        "verified": "Vérifié"
+      }
+    },
+    "rent": {
+      "alerts": {
+        "errorTitle": "Erreur",
+        "mustLogin": "Vous devez être connecté pour publier une annonce.",
+        "publishFailed": "Impossible de publier votre annonce. Vérifiez votre connexion et réessayez.",
+        "published": "Votre annonce a été publiée avec succès !",
+        "successTitle": "Succès"
+      },
+      "cancellation": {
+        "flexible": "Flexible — remboursement intégral jusqu'à 24 h avant",
+        "moderate": "Modérée — remboursement à 50 % jusqu'à 5 jours avant",
+        "strict": "Stricte — non remboursable"
+      },
+      "houseRules": {
+        "no_parties": "Pas de fêtes ni d'événements",
+        "no_pets": "Animaux non admis",
+        "no_smoking": "Interdiction de fumer",
+        "quiet_hours": "Respect des voisins (calme après 22 h)"
+      },
+      "neighborhoodChips": {
+        "calm": "Quartier calme",
+        "shops": "Commerces et services",
+        "transport": "Déplacements"
+      },
+      "neighborhoodTemplate": {
+        "calm": "Quartier tranquille, propice au repos et au télétravail.",
+        "shops": "Commerces et besoins du quotidien à proximité.",
+        "transport": "Transports en commun et axes principaux facilement accessibles."
+      },
+      "steps": {
+        "address": {
+          "quartier": "Secteur",
+          "street": "Rue",
+          "streetPlaceholder": "Facultatif — ex. 123 rue principale",
+          "zone": "Zone"
+        },
+        "amenities": {
+          "empty": "Aucun équipement disponible pour le moment",
+          "subtitle": "Facultatif — sélectionnez ce qui s'applique",
+          "title": "Équipements disponibles"
+        },
+        "cancellationPolicy": {
+          "title": "Politique d'annulation"
+        },
+        "checkInOut": {
+          "checkIn": "Heure de début de visite",
+          "checkOut": "Heure de fin de visite",
+          "subtitle": "Facultatif — quand les visites sont-elles possibles ?",
+          "title": "Horaires de visite"
+        },
+        "city": {
+          "title": "Ville"
+        },
+        "description": {
+          "placeholder": "Caractéristiques, équipements, quartier…",
+          "subtitle": "Facultatif — qu'est-ce qui le rend attractif ?",
+          "title": "Décrivez votre logement"
+        },
+        "houseRules": {
+          "title": "Règlement intérieur"
+        },
+        "intro": {
+          "body": "Créer une annonce de location ne prend que quelques minutes.",
+          "headline": "Prêt à louer ?",
+          "subtitle": "Un parcours simple en quelques étapes",
+          "title": "Louez votre logement"
+        },
+        "location": {
+          "noQuartier": "Pas de secteur — ce n'est pas grave",
+          "noZone": "Pas de zone — ce n'est pas grave",
+          "streetHint": "L'adresse est facultative — ajoutez-la à l'étape de vérification si besoin.",
+          "subtitle": "D'abord la ville, puis la zone et le secteur si vous les connaissez",
+          "title": "Où se situe le bien ?"
+        },
+        "photos": {
+          "firstPhoto": "Ajoutez votre première photo",
+          "subtitle": "Au moins une photo — les annonces avec photos obtiennent plus de vues",
+          "tapUpload": "Appuyez pour téléverser",
+          "title": "Ajouter des photos"
+        },
+        "policies": {
+          "subtitle": "Facultatif — annulation et règlement intérieur",
+          "title": "Conditions et règles"
+        },
+        "price": {
+          "hint": "Loyer mensuel",
+          "placeholder": "50000",
+          "subtitle": "Obligatoire",
+          "title": "Fixez votre loyer mensuel",
+          "unit": "MRU / mois"
+        },
+        "propertyCategory": {
+          "subtitle": "Quel type de logement est-ce ?",
+          "title": "Type de bien"
+        },
+        "review": {
+          "locationLabel": "Emplacement",
+          "photosLabel": "Photos",
+          "photosValue": "{{count}} photo(s)",
+          "priceLabel": "Prix",
+          "priceUnit": "MRU/mois",
+          "privateNoteHint": "Non visible par les visiteurs. Rappel facultatif sur ce bien.",
+          "privateNoteLabel": "Note privée (vous / agence uniquement)",
+          "privateNotePlaceholder": "ex. accès, contexte…",
+          "subtitle": "Tout est-il correct ?",
+          "tip": "Vous pouvez modifier votre annonce à tout moment après publication",
+          "title": "Vérifiez votre annonce",
+          "titleLabel": "Titre",
+          "typeLabel": "Typologie"
+        },
+        "title": {
+          "minChars": "Au moins 10 caractères",
+          "placeholder": "ex. appartement 2 chambres en centre-ville",
+          "subtitle": "Obligatoire — clair et attractif",
+          "title": "Donnez un titre à votre annonce"
+        }
+      },
+      "template": {
+        "familyBody": "Espace calme, adapté aux familles ou aux séjours prolongés.",
+        "investBody": "Bonne visibilité pour les locataires — agencement pratique et emplacement favorable.",
+        "rentIntro": "Location confortable à {{place}}."
+      }
+    },
+    "sale": {
+      "steps": {
+        "papers": {
+          "otherPlaceholder": "Ajouter un autre titre de document (facultatif)",
+          "subtitle": "Sélectionnez les documents juridiques disponibles pour rassurer les acheteurs",
+          "title": "Documents fonciers",
+          "hint": "Exemple : Titre foncier, Quitance, Lettre. Cela contribue à limiter la fraude."
+        },
+        "amenities": {
+          "hint": "Facultatif — passer si non applicable",
+          "subtitle": "Caractéristiques supplémentaires à forte valeur ajoutée",
+          "title": "Équipements premium"
+        },
+        "area": {
+          "hint": "Surface totale en mètres carrés",
+          "subtitle": "Soyez aussi précis que possible",
+          "title": "Quelle est la surface totale ?"
+        },
+        "bathrooms": {
+          "hint": "Salles de bain",
+          "skip": "Passer — non applicable",
+          "subtitle": "Facultatif — passer si non applicable",
+          "title": "Combien de salles de bain ?"
+        },
+        "bedrooms": {
+          "hint": "Chambres",
+          "skip": "Passer — non applicable",
+          "subtitle": "Facultatif — passer si non applicable",
+          "title": "Combien de chambres ?"
+        },
+        "city": {
+          "subtitle": "Commencez par la ville",
+          "title": "Où se situe-t-il ?"
+        },
+        "country": {
+          "subtitle": "Obligatoire — pays d'origine de cette annonce",
+          "title": "Quel pays ?"
+        },
+        "description": {
+          "placeholder": "Décrivez l'emplacement, les caractéristiques et ce qui plaira aux acheteurs…",
+          "subtitle": "Qu'est-ce qui le rend attractif ?",
+          "title": "Décrivez votre bien"
+        },
+        "indoor": {
+          "hint": "Facultatif — passer si non applicable",
+          "subtitle": "Sélectionnez tout ce qui s'applique",
+          "title": "Caractéristiques intérieures"
+        },
+        "indoorFeatures": {
+          "airConditioning": "Climatisation",
+          "dishwasher": "Lave-vaisselle",
+          "dryer": "Sèche-linge",
+          "elevator": "Ascenseur",
+          "fireplace": "Cheminée",
+          "furnished": "Meublé",
+          "heating": "Chauffage",
+          "walkInCloset": "Dressing",
+          "washer": "Lave-linge"
+        },
+        "intro": {
+          "body": "Créer une belle annonce ne prend que quelques minutes.",
+          "headline": "Prêt à vendre ?",
+          "subtitle": "Nous vous guidons à chaque étape",
+          "title": "Mettons votre bien en vente"
+        },
+        "map": {
+          "locationSet": "Emplacement défini",
+          "pinTitle": "Votre bien",
+          "subtitle": "Facultatif — appuyez sur la carte pour indiquer l'emplacement exact",
+          "tapHint": "Appuyez sur la carte pour marquer votre bien",
+          "title": "Indiquez votre emplacement"
+        },
+        "media": {
+          "addPhotos": "Ajouter des photos",
+          "addVideo": "Ajouter une vidéo",
+          "addedSuffix": "ajouté",
+          "readyToUpload": "Prêt à téléverser",
+          "subtitle": "Au moins une photo ou une vidéo est requise",
+          "tapUpload": "Appuyez pour téléverser",
+          "title": "Ajoutez des photos ou une vidéo",
+          "videoLabel": "Vidéo",
+          "videoOnly": "Ou ajouter uniquement une vidéo",
+          "videoOnlyHint": "Passer les photos, la vidéo suffit",
+          "videoReady": "Vidéo prête"
+        },
+        "outdoor": {
+          "hint": "Facultatif — passer si non applicable",
+          "subtitle": "Qu'y a-t-il à l'extérieur ?",
+          "title": "Caractéristiques extérieures"
+        },
+        "outdoorFeatures": {
+          "balcony": "Balcon",
+          "garage": "Garage",
+          "garden": "Jardin",
+          "patio": "Patio",
+          "pool": "Piscine",
+          "privateParking": "Parking privé",
+          "security": "Sécurité",
+          "terrace": "Terrasse"
+        },
+        "price": {
+          "hint": "Saisissez votre prix de vente",
+          "subtitle": "Étudiez les biens similaires pour un prix compétitif",
+          "title": "Fixez votre prix de vente"
+        },
+        "propertyType": {
+          "subtitle": "Choisissez celui qui correspond le mieux",
+          "title": "Quel type de bien ?"
+        },
+        "review": {
+          "added": "Ajouté",
+          "areaLabel": "Surface",
+          "bathShort": "sdb",
+          "bedBathLabel": "Chambres / Salles de bain",
+          "bedShort": "ch",
+          "locationLabel": "Emplacement",
+          "mediaLabel": "Médias",
+          "papersLabel": "Documents fonciers",
+          "priceLabel": "Prix",
+          "privateNoteHint": "Non visible par les visiteurs. Rappel facultatif pour cette annonce.",
+          "privateNoteLabel": "Note privée (vous et votre agence uniquement)",
+          "privateNotePlaceholder": "ex. code d'accès, contexte acheteur…",
+          "subtitle": "Tout vous semble correct ?",
+          "tip": "Vous pouvez modifier votre annonce à tout moment après publication",
+          "title": "Vérifiez votre annonce",
+          "titleLabel": "Titre",
+          "typeLabel": "Typologie"
+        },
+        "title": {
+          "placeholder": "ex. Spacieux appartement 3 chambres en centre-ville",
+          "subtitle": "Soyez clair et descriptif",
+          "title": "Donnez un titre à votre bien"
+        },
+        "yearBuilt": {
+          "hint": "Faites défiler pour sélectionner l'année",
+          "subtitle": "Facultatif — aide les acheteurs à connaître l'ancienneté du bien",
+          "title": "Année de construction ?"
+        },
+        "zone": {
+          "dropdownLabel": "Zone",
+          "quartierLabel": "Quartier (facultatif)",
+          "selectCityFirst": "Veuillez d'abord sélectionner une ville",
+          "skipNoQuartier": "Passer — pas de quartier précis",
+          "skipNoZone": "Passer — pas de zone précise",
+          "subtitle": "Facultatif — aide à affiner la localisation",
+          "title": "Quelle zone ?"
+        }
+      },
+      "createTimeout": "Le serveur n'a pas répondu. Redémarrez l'API, vérifiez que Postgres est actif (port dans .env), puis réessayez.",
+      "propertyType": {
+        "apartment": "Appartement",
+        "duplex": "Duplex",
+        "house": "Maison",
+        "studio": "Studio",
+        "townhouse": "Maison de ville",
+        "unknown": "Bien",
+        "villa": "Villa"
+      },
+      "successListed": "Bien publié avec succès !",
+      "template": {
+        "familyBody": "Maison lumineuse et confortable, agencement pratique. Idéale pour une famille ou un logement de longue durée.",
+        "investBody": "Belle opportunité dans un secteur recherché. Convient à l'habitation ou à l'investissement."
+      }
+    }
+  }
+}

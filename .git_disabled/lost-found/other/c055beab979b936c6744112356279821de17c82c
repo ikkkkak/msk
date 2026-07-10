@@ -1,0 +1,2122 @@
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Image,
+  Dimensions,
+  StatusBar,
+  Modal,
+  Animated,
+  Platform
+} from "react-native";
+import { MaterialIcons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
+import { Video, ResizeMode } from "expo-av";
+import {
+  useLocationCriteria,
+  useLocationProperties,
+  useMultipleLocationProperties
+} from "../hooks/queries/useLocationDiscovery";
+import { useLanguage } from "../contexts/LanguageContext";
+import { useVideoFeedQuery } from "../hooks/queries/useVideoFeedQuery";
+import { useUser } from "../hooks/useUser";
+import {
+  useAddToWishlistMutation,
+  useRemoveFromWishlistMutation
+} from "../hooks/mutations/useWishlistMutations";
+import { useTranslation } from "react-i18next";
+import { theme } from "../theme";
+import ShareSheet from "./ShareSheet";
+import { Share, Play, Pause } from "phosphor-react-native";
+import CustomToast from "./CustomToast";
+// Translation hooks removed - backend handles all translations
+
+const { width } = Dimensions.get("window");
+const cardWidth = width * 0.48; // For horizontal cards (kept for image carousel)
+const verticalCardWidth = (width - 40) * 0.48; // Two cards per row: 48% of available width (accounting for padding and gap)
+
+// Smooth skeleton loading component
+const SkeletonCard: React.FC<{
+  isFirst?: boolean;
+  isLast?: boolean;
+  delay?: number;
+}> = ({ isFirst, isLast, delay = 0 }) => {
+  const shimmerAnimation = useRef(new Animated.Value(0)).current;
+  // On Android, start with full opacity and scale to avoid fade-in animations
+  const fadeAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0)).current;
+  const scaleAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0.95)).current;
+
+  useEffect(() => {
+    // DISABLE ANIMATIONS ON ANDROID to prevent crashes and improve performance
+    if (Platform.OS === 'android') {
+      // On Android, skip ALL animations - cards appear instantly, no shimmer
+      // Set final values immediately
+      fadeAnim.setValue(1);
+      scaleAnim.setValue(1);
+      shimmerAnimation.setValue(0); // No shimmer on Android
+      return;
+    }
+    
+    // iOS: Staggered fade-in animation
+    const fadeInTimer = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true
+        }),
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true
+        })
+      ]).start();
+    }, delay);
+
+    // Shimmer animation - iOS only
+    const startShimmer = () => {
+      Animated.sequence([
+        Animated.timing(shimmerAnimation, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true
+        }),
+        Animated.timing(shimmerAnimation, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true
+        })
+      ]).start(() => startShimmer());
+    };
+
+    const shimmerTimer = setTimeout(startShimmer, delay + 200);
+
+    return () => {
+      clearTimeout(fadeInTimer);
+      clearTimeout(shimmerTimer);
+    };
+  }, [delay, fadeAnim, scaleAnim, shimmerAnimation]);
+
+  const shimmerStyle = {
+    opacity: shimmerAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.4, 0.8]
+    })
+  };
+
+  return (
+    <Animated.View
+      style={[
+        styles.propertyCard,
+        isFirst && styles.firstCard,
+        isLast && styles.lastCard,
+        {
+          opacity: fadeAnim,
+          transform: [{ scale: scaleAnim }]
+        }
+      ]}
+    >
+      <View style={styles.propertyImageContainer}>
+        <Animated.View style={[styles.skeletonImage, shimmerStyle]} />
+      </View>
+      <View style={styles.propertyContent}>
+        <Animated.View style={[styles.skeletonText1, shimmerStyle]} />
+        <Animated.View style={[styles.skeletonText2, shimmerStyle]} />
+        <Animated.View style={[styles.skeletonText3, shimmerStyle]} />
+      </View>
+    </Animated.View>
+  );
+};
+
+// Helper functions to customize properties for each location
+const getLocationSpecificTitle = (
+  locationKey: string,
+  originalTitle: string,
+  index: number
+) => {
+  const locationTitles = {
+    center: [
+      "Modern Apartment in City Center",
+      "Luxury Studio Downtown",
+      "Cozy Room Near Center"
+    ],
+    port: [
+      "Port View Apartment",
+      "Harbor Side Studio",
+      "Maritime District Room"
+    ],
+    airport: [
+      "Airport Convenience Suite",
+      "Terminal View Apartment",
+      "Traveler's Rest"
+    ],
+    embassy: [
+      "Diplomatic Quarter Villa",
+      "Embassy District Luxury",
+      "Executive Suite"
+    ],
+    beach: ["Beachfront Paradise", "Ocean View Retreat", "Coastal Getaway"],
+    market: [
+      "Market District Apartment",
+      "Shopping Center Studio",
+      "Commercial Area Room"
+    ]
+  };
+
+  const titles = locationTitles[locationKey as keyof typeof locationTitles] || [
+    originalTitle
+  ];
+  return titles[index % titles.length];
+};
+
+const getLocationSpecificDescription = (
+  locationKey: string,
+  originalDescription: string
+) => {
+  const locationDescriptions = {
+    center:
+      "Perfect location in the heart of Nouakchott with easy access to all major attractions.",
+    port: "Stunning views of the port with modern amenities and maritime charm.",
+    airport:
+      "Conveniently located near the airport with easy transportation access.",
+    embassy: "Luxurious accommodation in the prestigious embassy quarter.",
+    beach: "Beautiful beachfront property with ocean views and coastal breeze.",
+    market:
+      "Vibrant location near local markets with authentic Mauritanian culture."
+  };
+
+  return (
+    locationDescriptions[locationKey as keyof typeof locationDescriptions] ||
+    originalDescription
+  );
+};
+
+interface AirbnbHomeDiscoveryProps {
+  onViewAll?: (locationKey: string, locationName: string) => void;
+}
+
+export const AirbnbHomeDiscovery: React.FC<AirbnbHomeDiscoveryProps> = ({
+  onViewAll
+}) => {
+  const navigation = useNavigation();
+  const [selectedCategory, setSelectedCategory] = useState("homes");
+  const [showScrollToTop, setShowScrollToTop] = useState<boolean>(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const lastScrollY = useRef<number>(0);
+  const buttonOpacity = useRef(new Animated.Value(0)).current;
+  // Screen-level toast
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState<"success" | "error" | "info">(
+    "success"
+  );
+  const showToastMessage = (
+    message: string,
+    type: "success" | "error" | "info" = "success"
+  ) => {
+    setToastMessage(message);
+    setToastType(type);
+    setShowToast(true);
+  };
+
+  // Get location criteria from server
+  // Get current language for API requests
+  const { currentLanguage } = useLanguage();
+  const langParam = (currentLanguage || "en").toLowerCase();
+
+  const {
+    data: locationCriteria,
+    isLoading: criteriaLoading,
+    error: criteriaError
+  } = useLocationCriteria(langParam);
+
+  const handleViewAll = (locationKey: string, locationName: string) => {
+    if (onViewAll) {
+      onViewAll(locationKey, locationName);
+    } else {
+      const criteriaEntry = locationCriteria?.find(
+        (c: any) =>
+          c.name === locationKey ||
+          c.displayName === locationKey ||
+          c.name === locationKey.toLowerCase() ||
+          c.displayName?.toLowerCase() === locationKey.toLowerCase()
+      );
+
+      const lat = criteriaEntry?.centerLat;
+      const lng = criteriaEntry?.centerLng;
+      const criteriaId = criteriaEntry?.id;
+      const radiusKm = criteriaEntry?.radius ?? 5; // default radius if not provided by backend
+
+      const navigationParams = {
+        location: locationKey,
+        locationName,
+        criteriaId,
+        lat,
+        lng,
+        radiusKm,
+        filterByLocationCriteria: true
+      };
+
+      // Navigate to the LocationSearchScreen with strict location filter params
+      (navigation as any).navigate("LocationSearch", navigationParams);
+    }
+  };
+
+  const handleScrollToTop = () => {
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTo({ y: 0, animated: true });
+    } else {
+      console.log("❌ AirbnbHomeDiscovery: ScrollView ref is null");
+    }
+  };
+
+  const handleScroll = (event: any) => {
+    const scrollY = event.nativeEvent.contentOffset.y;
+    const isScrollingDown = scrollY > lastScrollY.current;
+    const isScrollingUp = scrollY < lastScrollY.current;
+
+    // Show button when scrolling down and past 100px
+    if (isScrollingDown && scrollY > 100) {
+      setShowScrollToTop(true);
+      Animated.timing(buttonOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true
+      }).start();
+    }
+    // Hide button when scrolling up or near the top
+    else if (isScrollingUp && scrollY < 50) {
+      Animated.timing(buttonOpacity, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true
+      }).start(() => {
+        setShowScrollToTop(false);
+      });
+    }
+
+    lastScrollY.current = scrollY;
+  };
+
+  const categories = [
+    { key: "homes", label: "Homes", icon: "home", color: "#00A699" },
+    {
+      key: "experiences",
+      label: "Experiences",
+      icon: "flight",
+      color: "#FF5A5F",
+      isNew: true
+    },
+    {
+      key: "services",
+      label: "Services",
+      icon: "notifications",
+      color: "#C0C0C0",
+      isNew: true
+    }
+  ];
+
+  // Generate location sections from server data, only include sections with properties
+  const locationSections =
+    locationCriteria
+      ?.map((criteria: any) => ({
+        title: criteria.displayName,
+        locationKey: criteria.name,
+        locationName: criteria.displayName,
+        criteriaId: criteria.id,
+        description: criteria.description,
+        icon: criteria.icon,
+        color: criteria.color,
+        propertyCount: criteria.propertyCount
+      }))
+      .filter((section: any) => section.propertyCount > 0) || [];
+  const { t } = useTranslation();
+
+  // Get all criteria IDs
+  const criteriaIds = useMemo(
+    () => locationSections.map((section: any) => section.criteriaId),
+    [locationSections]
+  );
+
+  // Fetch all properties from all location criteria at once (using langParam from above)
+  const {
+    data: allLocationData,
+    isLoading: propertiesLoading,
+    error: propertiesError
+  } = useMultipleLocationProperties(
+    criteriaIds.length > 0 ? criteriaIds : [],
+    50,
+    langParam
+  );
+
+  // Combine all properties with their location criteria info
+  const allProperties = useMemo(() => {
+    const combined: Array<{ property: any; locationCriteria: any }> = [];
+
+    if (allLocationData && locationSections.length > 0) {
+      allLocationData.forEach((locationData: any, index: number) => {
+        const section = locationSections[index];
+        if (section && locationData?.properties) {
+          locationData.properties.forEach((property: any) => {
+            combined.push({
+              property,
+              locationCriteria: {
+                displayName: section.locationName,
+                locationKey: section.locationKey,
+                criteriaId: section.criteriaId
+              }
+            });
+          });
+        }
+      });
+    }
+
+    return combined;
+  }, [allLocationData, locationSections]);
+
+  const isLoading = criteriaLoading || propertiesLoading;
+  const hasError = criteriaError || propertiesError;
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+
+      {/* Content */}
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
+        contentContainerStyle={styles.verticalScrollContent}
+      >
+        {isLoading ? (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>Loading properties...</Text>
+          </View>
+        ) : hasError ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>
+              Unable to load properties. Please try again later.
+            </Text>
+          </View>
+        ) : allProperties.length > 0 ? (
+          <View style={styles.twoColumnContainer}>
+            {allProperties.map((item, index) => (
+              <React.Fragment
+                key={`${item.property.id || item.property.ID}-${
+                  item.locationCriteria.criteriaId
+                }`}
+              >
+                <PropertyCard
+                  property={item.property}
+                  locationCriteria={item.locationCriteria}
+                  delay={index * 50}
+                  onToast={showToastMessage}
+                />
+                {index === 3 && (
+                  <View style={styles.fullWidthPromo}>
+                    <AddFreePromo
+                      onPress={() =>
+                        (navigation as any).navigate("AddListingGuide")
+                      }
+                    />
+                  </View>
+                )}
+              </React.Fragment>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>No properties found.</Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Scroll to Top Button */}
+      {showScrollToTop && (
+        <Animated.View
+          style={[styles.scrollToTopContainer, { opacity: buttonOpacity }]}
+        >
+          <TouchableOpacity
+            style={styles.scrollToTopButton}
+            onPress={() => {
+              handleScrollToTop();
+            }}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons
+              name="keyboard-arrow-up"
+              size={20}
+              color={theme["color-temporary-primary"]}
+            />
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+      {showToast && (
+        <CustomToast
+          message={toastMessage}
+          type={toastType}
+          duration={3000}
+          onHide={() => setShowToast(false)}
+        />
+      )}
+    </View>
+  );
+};
+const AddFreePromo: React.FC<{ onPress: () => void }> = ({ onPress }) => {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.promoCard}>
+      <View style={styles.promoContent}>
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center"
+          }}
+        >
+          <View>
+            <Text style={styles.promoTitle}>
+              {t("promo.addFree.title", "أضف إعلانك مجاناً لمدة 14 يوماً")}
+            </Text>
+            <Text style={styles.promoSubtitle} numberOfLines={3}>
+              {t(
+                "promo.addFree.subtitle",
+                "قم بإدراج عقار للبيع، أرض، أو إيجار الآن — عرض محدود! واجهة احترافية، وصول واسع، وتجربة سهلة للمعلنين."
+              )}
+            </Text>
+            <TouchableOpacity style={styles.promoCta} onPress={onPress}>
+              <Text style={styles.promoCtaText}>
+                {t("promo.addFree.cta", "ابدأ الآن")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <Image
+            width={50}
+            height={50}
+            style={{
+              width: 90,
+              height: 90,
+              position: "absolute",
+              right: 10,
+              bottom: -10,
+              maxWidth: 120,
+              maxHeight: 120,
+              minWidth: 60,
+              minHeight: 60
+            }}
+            resizeMode="contain"
+            source={require("../assets/land1.jpg")}
+          />
+        </View>
+      </View>
+    </View>
+  );
+};
+
+const VideoFeedSection: React.FC = () => {
+  const navigation = useNavigation();
+  const { t } = useTranslation();
+  const { data: videos, isLoading } = useVideoFeedQuery(1, 10);
+  const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  // Auto-scroll videos
+  useEffect(() => {
+    if (!videos || videos.length === 0) return;
+
+    const interval = setInterval(() => {
+      if (isPlaying) {
+        setCurrentVideoIndex((prev) => (prev + 1) % videos.length);
+      }
+    }, 5000); // Change video every 5 seconds
+
+    return () => clearInterval(interval);
+  }, [videos, isPlaying]);
+
+  // Auto-scroll to current video
+  useEffect(() => {
+    if (scrollViewRef.current && videos && videos.length > 0) {
+      scrollViewRef.current.scrollTo({
+        x: currentVideoIndex * (width * 0.6 + 12),
+        animated: true
+      });
+    }
+  }, [currentVideoIndex]);
+
+  const handleViewMore = () => {
+    (navigation as any).navigate("Videos");
+  };
+
+  const togglePlayPause = () => {
+    setIsPlaying(!isPlaying);
+  };
+
+  if (isLoading) {
+    return (
+      <View style={styles.videoSection}>
+        <View style={styles.videoSectionHeader}>
+          <Text style={styles.videoSectionTitle}>{t("videos.discover")}</Text>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.videoScroll}
+        >
+          {[1, 2, 3].map((index) => (
+            <View key={index} style={styles.videoCardSkeleton}>
+              <View style={styles.videoSkeleton} />
+              <View style={styles.videoInfoSkeleton}>
+                <View style={styles.videoTitleSkeleton} />
+                <View style={styles.videoSubtitleSkeleton} />
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (!videos || videos.length === 0) {
+    return null;
+  }
+
+  return (
+    <View style={styles.videoSection}>
+      <View style={styles.videoSectionHeader}>
+        <Text style={styles.videoSectionTitle}>{t("videos.discover")}</Text>
+        <TouchableOpacity
+          style={styles.viewMoreButton}
+          onPress={handleViewMore}
+        >
+          <Text style={styles.viewMoreText}>{t("common.viewMore")}</Text>
+          <MaterialIcons name="arrow-forward-ios" size={13} color="#222222" />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        ref={scrollViewRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.videoScroll}
+        contentContainerStyle={styles.videoScrollContent}
+        decelerationRate="fast"
+        snapToInterval={width * 0.6 + 12}
+        snapToAlignment="start"
+      >
+        {videos.slice(0, 10).map((video: any, index: number) => (
+          <VideoCard
+            key={video.id || video.ID}
+            video={video}
+            isActive={index === currentVideoIndex}
+            isPlaying={isPlaying && index === currentVideoIndex}
+            onPress={() =>
+              (navigation as any).navigate("VideoFeed", {
+                initialVideoId: video.id || video.ID
+              })
+            }
+            onTogglePlay={togglePlayPause}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+};
+
+interface VideoCardProps {
+  video: any;
+  isActive: boolean;
+  isPlaying: boolean;
+  onPress: () => void;
+  onTogglePlay: () => void;
+}
+
+const VideoCard: React.FC<VideoCardProps> = ({
+  video,
+  isActive,
+  isPlaying,
+  onPress,
+  onTogglePlay
+}) => {
+  const { t } = useTranslation();
+  const videoRef = useRef<Video>(null);
+
+  const videoUrl =
+    video.videoURL || video.videoUrl || video.VideoURL || video.url;
+  const videoThumbnail =
+    video.thumbnailURL ||
+    video.thumbnail ||
+    video.Thumbnail ||
+    video.previewImage;
+  const videoTitle = video.caption || video.title || video.Title;
+  const propertyTitleRaw =
+    video.property?.title || video.Property?.Title || "Beautiful Property";
+  const propertyPrice =
+    video.property?.nightlyPrice || video.Property?.NightlyPrice || 0;
+
+  // Title already localized by backend
+  const propertyTitle = propertyTitleRaw;
+  const isVideoTitleTranslated = false;
+
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("fr-MR", {
+      style: "currency",
+      currency: "MRU",
+      minimumFractionDigits: 0
+    }).format(price);
+  };
+
+  // Handle video playback
+  useEffect(() => {
+    if (videoRef.current) {
+      if (isPlaying && isActive) {
+        videoRef.current.playAsync();
+      } else {
+        videoRef.current.pauseAsync();
+      }
+    }
+  }, [isPlaying, isActive]);
+
+  return (
+    <TouchableOpacity
+      style={styles.videoCard}
+      onPress={onPress}
+      activeOpacity={0.9}
+    >
+      <View style={styles.videoContainer}>
+        {videoUrl ? (
+          <Video
+            ref={videoRef}
+            source={{ uri: videoUrl }}
+            style={styles.videoPlayer}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay={isPlaying && isActive}
+            isLooping={true}
+            isMuted={true}
+            onLoad={() => {
+              if (isPlaying && isActive) {
+                videoRef.current?.playAsync();
+              }
+            }}
+          />
+        ) : videoThumbnail ? (
+          <Image
+            source={{ uri: videoThumbnail }}
+            style={styles.videoThumbnail}
+          />
+        ) : (
+          <View style={styles.videoPlaceholder}>
+            <MaterialIcons
+              name="play-circle-filled"
+              size={48}
+              color="#FFFFFF"
+            />
+          </View>
+        )}
+
+        {/* Play/Pause Overlay */}
+        <TouchableOpacity
+          style={styles.playButton}
+          onPress={onTogglePlay}
+          activeOpacity={0.8}
+        >
+          {isPlaying && isActive ? (
+            <Pause size={24} color="#FFFFFF" weight="fill" />
+          ) : (
+            <Play size={24} color="#FFFFFF" weight="fill" />
+          )}
+        </TouchableOpacity>
+
+        {/* Video Info Overlay */}
+        <View style={styles.videoInfoOverlay}>
+          <Text style={styles.videoTitle} numberOfLines={2}>
+            {videoTitle}
+          </Text>
+          <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+            <Text
+              style={[
+                styles.propertyTitle,
+                {
+                  color: "#FFF"
+                }
+              ]}
+              numberOfLines={1}
+            >
+              {propertyTitle}
+            </Text>
+            {isVideoTitleTranslated && (
+              <MaterialIcons
+                name="translate"
+                size={12}
+                color="#FFFFFF"
+                style={{ marginLeft: 4, opacity: 0.9 }}
+              />
+            )}
+          </View>
+          {propertyPrice > 0 && (
+            <Text style={styles.propertyPrice}>
+              {formatPrice(propertyPrice)} / {t("common.night", "night")}
+            </Text>
+          )}
+        </View>
+
+        {/* Duration Badge */}
+        {video.duration && (
+          <View style={styles.durationBadge}>
+            <Text style={styles.durationText}>{video.duration}</Text>
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+};
+
+interface LocationSectionProps {
+  title: string;
+  locationKey: string;
+  locationName: string;
+  criteriaId: number;
+  description?: string;
+  icon?: string;
+  color?: string;
+  propertyCount?: number;
+  onViewAll: (locationKey: string, locationName: string) => void;
+  isFirst?: boolean;
+  onToast?: (message: string, type?: "success" | "error" | "info") => void;
+}
+
+const LocationSection: React.FC<LocationSectionProps> = ({
+  title,
+  locationKey,
+  locationName,
+  criteriaId,
+  description,
+  icon,
+  color,
+  propertyCount,
+  onViewAll,
+  isFirst = false,
+  onToast
+}) => {
+  const { t } = useTranslation();
+  // Use the new location discovery API
+  const { currentLanguage } = useLanguage();
+  const langParam = (currentLanguage || "en").toLowerCase();
+  const {
+    data: locationData,
+    isLoading: locationLoading,
+    error: locationError
+  } = useLocationProperties(criteriaId, 8, langParam);
+
+  if (locationLoading) {
+    return (
+      <View style={[styles.section, isFirst && styles.firstSection]}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+        </View>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.propertiesScroll}
+          contentContainerStyle={styles.propertiesScrollContent}
+        >
+          {[1, 2, 3, 4].map((index) => (
+            <SkeletonCard
+              key={index}
+              isFirst={isFirst && index === 0}
+              isLast={index === 3}
+              delay={index * 100} // Staggered delay: 0ms, 100ms, 200ms, 300ms
+            />
+          ))}
+        </ScrollView>
+      </View>
+    );
+  }
+
+  if (locationError) {
+    return null; // Don't render sections with errors
+  }
+
+  // Get properties from location data
+  const properties = locationData?.properties || [];
+
+  if (!properties || properties.length === 0) {
+    return null; // Don't render empty sections
+  }
+  return (
+    <View style={[styles.section, isFirst && styles.firstSection]}>
+      <View style={styles.sectionHeader}>
+        <View style={styles.sectionTitleContainer}>
+          <Text style={styles.sectionTitle}>{title.toUpperCase()}</Text>
+          {propertyCount !== undefined && (
+            <Text style={styles.propertyCountText}>
+              {propertyCount} {t("common.properties")}
+            </Text>
+          )}
+        </View>
+        <TouchableOpacity
+          style={styles.viewAllButton}
+          onPress={() => onViewAll(locationKey, locationName)}
+        >
+          <Text style={styles.viewAllText}>{t("common.viewAll")}</Text>
+          <MaterialIcons name="arrow-forward-ios" size={13} color="#222222" />
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.propertiesScroll}
+        contentContainerStyle={styles.propertiesScrollContent}
+        scrollEnabled={true}
+        nestedScrollEnabled={true}
+        bounces={true}
+        alwaysBounceHorizontal={false}
+        directionalLockEnabled={true}
+      >
+        {properties.slice(0, 8).map((property: any, index: number) => (
+          <PropertyCard
+            key={property.id || property.ID}
+            property={property}
+            isFirst={index === 0}
+            isLast={index === Math.min(properties.length, 8) - 1}
+            delay={index * 80} // Staggered delay for smooth appearance
+            onToast={onToast}
+          />
+        ))}
+      </ScrollView>
+    </View>
+  );
+};
+
+interface PropertyCardProps {
+  property: any;
+  locationCriteria?: {
+    displayName: string;
+    locationKey: string;
+    criteriaId: number;
+  };
+  isFirst?: boolean;
+  isLast?: boolean;
+  delay?: number;
+  onToast?: (message: string, type?: "success" | "error" | "info") => void;
+}
+
+const PropertyCard: React.FC<PropertyCardProps> = ({
+  property,
+  locationCriteria,
+  isFirst,
+  isLast,
+  delay = 0,
+  onToast
+}) => {
+  const navigation = useNavigation();
+  const [isLiked, setIsLiked] = useState(false);
+  const [showVerificationModal, setShowVerificationModal] = useState(false);
+  const [showShareSheet, setShowShareSheet] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const touchStartX = useRef<number>(0);
+  const touchStartY = useRef<number>(0);
+  const { user, setSavedProperties } = useUser();
+  const addToWishlist = useAddToWishlistMutation();
+  const removeFromWishlist = useRemoveFromWishlistMutation();
+  const { currentLanguage } = useLanguage();
+  const langParam = (currentLanguage || "en").toLowerCase();
+
+  const showToastMessage = (
+    message: string,
+    type: "success" | "error" | "info" = "success"
+  ) => {
+    if (onToast) onToast(message, type);
+  };
+
+  // DISABLE ANIMATIONS ON ANDROID to prevent crashes
+  // On Android, start with full opacity and scale to avoid fade-in animations
+  const fadeAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0)).current;
+  const scaleAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0.95)).current;
+
+  useEffect(() => {
+    // DISABLE ANIMATIONS ON ANDROID to prevent crashes and improve performance
+    if (Platform.OS === 'android') {
+      // On Android, set final values immediately - no animations
+      fadeAnim.setValue(1);
+      scaleAnim.setValue(1);
+      return;
+    }
+    
+    // iOS: Smooth fade-in animation
+    const timer = setTimeout(() => {
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: 400,
+            useNativeDriver: true
+          }),
+          Animated.spring(scaleAnim, {
+            toValue: 1.02,
+            tension: 100,
+            friction: 8,
+            useNativeDriver: true
+          })
+        ]),
+        Animated.spring(scaleAnim, {
+          toValue: 1,
+          tension: 100,
+          friction: 8,
+          useNativeDriver: true
+        })
+      ]).start();
+    }, delay);
+
+    return () => clearTimeout(timer);
+  }, [delay, fadeAnim, scaleAnim]);
+
+  // Keep local liked state in sync with global savedProperties
+  useEffect(() => {
+    if (!property) return;
+    const propertyId = property.id || property.ID;
+    const likedNow = !!user?.savedProperties?.includes(propertyId);
+    if (likedNow !== isLiked) setIsLiked(likedNow);
+  }, [user?.savedProperties, property?.id, property?.ID]);
+
+  const handlePress = () => {
+    const propertyId = property.id || property.ID;
+    (navigation as any).navigate("PropertyDetails", { propertyID: propertyId });
+  };
+
+  const toggleLike = async () => {
+    if (isLiked) {
+      // If already liked, remove from wishlist
+      await handleRemoveFromWishlist();
+    } else {
+      // If not liked, add to wishlist directly
+      await handleAddToWishlist();
+    }
+  };
+
+  const handleAddToWishlist = async () => {
+    if (!property) return;
+
+    const propertyId = property.id || property.ID;
+
+    try {
+      await addToWishlist.mutateAsync(propertyId);
+
+      // Update user's saved properties in frontend state
+      if (user && !user.savedProperties?.includes(propertyId)) {
+        const newSavedProperties = [
+          ...(user.savedProperties || []),
+          propertyId
+        ];
+        setSavedProperties(newSavedProperties);
+      }
+
+      setIsLiked(true);
+      showToastMessage(t("addProperty.toast.wishlist.added"), "success");
+    } catch (error) {
+      console.error("Error adding to wishlist:", error);
+      showToastMessage(
+        t("addProperty.toast.wishlist.failedAdd", "Failed to add to wishlist"),
+        "error"
+      );
+    }
+  };
+
+  const handleRemoveFromWishlist = async () => {
+    if (!property) return;
+
+    const propertyId = property.id || property.ID;
+
+    try {
+      await removeFromWishlist.mutateAsync(propertyId);
+
+      // Update user's saved properties in frontend state
+      if (user && user.savedProperties?.includes(propertyId)) {
+        const newSavedProperties = user.savedProperties.filter(
+          (id) => id !== propertyId
+        );
+        setSavedProperties(newSavedProperties);
+      }
+
+      setIsLiked(false);
+      showToastMessage(
+        t(
+          "addProperty.toast.wishlist.removed",
+          "Property removed from wishlist"
+        ),
+        "success"
+      );
+    } catch (error) {
+      console.error("Error removing from wishlist:", error);
+      // Still update the UI state even if API call fails
+      setIsLiked(false);
+      showToastMessage(
+        t(
+          "addProperty.toast.wishlist.failedRemove",
+          "Failed to remove from wishlist"
+        ),
+        "error"
+      );
+    }
+  };
+
+  const formatPrice = (price: number) => {
+    return new Intl.NumberFormat("fr-MR", {
+      style: "currency",
+      currency: "MRU",
+      minimumFractionDigits: 0
+    }).format(price);
+  };
+
+  const getPropertyTypeText = (type: string) => {
+    switch (type) {
+      case "entire_place":
+        return "Apartment";
+      case "private_room":
+        return "Private room";
+      case "shared_room":
+        return "Shared room";
+      default:
+        return "Place to stay";
+    }
+  };
+
+  // Handle different property data structures
+  const propertyImages =
+    property.images ||
+    (typeof property.Images === "string" ? JSON.parse(property.Images) : []);
+  const propertyPrice = property.nightlyPrice || property.NightlyPrice || 0;
+  const propertyRating = property.rating || property.Rating || 0;
+  const propertyType =
+    property.propertyType || property.PropertyType || "entire_place";
+  const propertyCity = property.city || property.City || "Nouakchott";
+  const { t } = useTranslation();
+
+  // Use backend-translated fields directly (no frontend translation needed)
+  const propertyTitle = property.title || property.Title || "";
+  const propertyDescription =
+    property.description ||
+    property.Description ||
+    property.summary ||
+    property.Summary ||
+    "";
+
+  // Debug: Log title to verify language (remove in production)
+  useEffect(() => {
+    if (propertyTitle && property.id) {
+      console.log(
+        `🌐 Property ${property.id || property.ID} title (lang=${langParam}):`,
+        propertyTitle
+      );
+    }
+  }, [propertyTitle, property.id, property.ID, langParam]);
+
+  // Handle horizontal scroll for image carousel
+  const handleScroll = (event: any) => {
+    const scrollPosition = event.nativeEvent.contentOffset.x;
+    const imageWidth = width - 40; // Full width minus padding for single column
+    const index = Math.round(scrollPosition / imageWidth);
+    if (
+      index !== currentImageIndex &&
+      index >= 0 &&
+      index < propertyImages.length
+    ) {
+      setCurrentImageIndex(index);
+    }
+  };
+
+  // Reset to first image when property changes
+  useEffect(() => {
+    setCurrentImageIndex(0);
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTo({ x: 0, animated: false });
+    }
+  }, [property.id || property.ID]);
+
+  // Get visible dots based on active index and total photos
+  const getVisibleDots = () => {
+    const MAX_VISIBLE = 5;
+    const totalPhotos = propertyImages.length;
+
+    if (totalPhotos <= MAX_VISIBLE) {
+      // Show all dots if 5 or fewer photos
+      return propertyImages.map((_: any, index: number) => ({
+        index,
+        distance: Math.abs(index - currentImageIndex)
+      }));
+    }
+
+    // Show max 5 dots centered around active index
+    // Try to center around active, but adjust if near edges
+    const visibleIndices: number[] = [];
+    let startOffset = -2;
+    let endOffset = 2;
+
+    // Adjust if we're near the start
+    if (currentImageIndex < 2) {
+      startOffset = -currentImageIndex;
+      endOffset = MAX_VISIBLE - currentImageIndex - 1;
+    }
+    // Adjust if we're near the end
+    else if (currentImageIndex >= totalPhotos - 2) {
+      startOffset = -(MAX_VISIBLE - (totalPhotos - currentImageIndex));
+      endOffset = totalPhotos - currentImageIndex - 1;
+    }
+
+    for (let i = startOffset; i <= endOffset; i++) {
+      const idx = currentImageIndex + i;
+      if (
+        idx >= 0 &&
+        idx < totalPhotos &&
+        visibleIndices.length < MAX_VISIBLE
+      ) {
+        visibleIndices.push(idx);
+      }
+    }
+
+    return visibleIndices
+      .sort((a, b) => a - b) // Sort by index to ensure correct order
+      .map((index) => ({
+        index,
+        distance: Math.abs(index - currentImageIndex)
+      }));
+  };
+
+  // Get dot size and opacity based on distance from active
+  const getDotStyle = (distance: number) => {
+    let size = 4; // smallest
+    let opacity = 0.3;
+    let color = "#D1D1D1";
+
+    switch (distance) {
+      case 0: // active (center)
+        size = 8;
+        opacity = 1;
+        color = "#FFFFFF";
+        break;
+      case 1: // near
+        size = 6;
+        opacity = 0.6;
+        color = "#D1D1D1";
+        break;
+      case 2: // far
+        size = 4;
+        opacity = 0.3;
+        color = "#D1D1D1";
+        break;
+      default:
+        // Hidden (beyond 2 steps)
+        return { display: "none" as const };
+    }
+
+    return {
+      width: size,
+      height: size,
+      borderRadius: size / 2,
+      backgroundColor: color,
+      opacity
+    };
+  };
+
+  // Animated values for dots (spring animation) - memoized per dot index
+  const dotScaleAnims = useRef<{ [key: number]: Animated.Value }>({}).current;
+
+  // Initialize and update dot animations
+  useEffect(() => {
+    const visibleDots = getVisibleDots();
+
+    // Initialize animated values for all possible dots
+    propertyImages.forEach((_: any, index: number) => {
+      if (!dotScaleAnims[index]) {
+        const distance = Math.abs(index - currentImageIndex);
+        const scale = distance === 0 ? 1 : distance === 1 ? 0.75 : 0.5;
+        dotScaleAnims[index] = new Animated.Value(scale);
+      }
+    });
+
+    // Animate dots when currentImageIndex changes
+    visibleDots.forEach(
+      ({ index, distance }: { index: number; distance: number }) => {
+        const targetScale = distance === 0 ? 1 : distance === 1 ? 0.75 : 0.5;
+        if (dotScaleAnims[index]) {
+          Animated.spring(dotScaleAnims[index], {
+            toValue: targetScale,
+            tension: 100,
+            friction: 8,
+            useNativeDriver: true
+          }).start();
+        }
+      }
+    );
+  }, [currentImageIndex, propertyImages.length]);
+
+  return (
+    <Animated.View
+      style={[
+        styles.propertyCard,
+        isFirst && styles.firstCard,
+        isLast && styles.lastCard,
+        {
+          opacity: fadeAnim,
+          transform: [{ scale: scaleAnim }]
+        }
+      ]}
+    >
+      <TouchableOpacity
+        style={styles.propertyCardTouchable}
+        onPress={handlePress}
+        activeOpacity={0.9}
+        delayPressIn={150}
+      >
+        <View style={styles.propertyImageContainer}>
+          {propertyImages && propertyImages.length > 0 ? (
+            <>
+              {/* Horizontal Image Carousel */}
+              <ScrollView
+                ref={scrollViewRef}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+                decelerationRate="fast"
+                snapToInterval={width - 40}
+                snapToAlignment="start"
+                style={styles.imageCarousel}
+                contentContainerStyle={[
+                  styles.imageCarouselContent,
+                  { width: (width - 40) * propertyImages.length } // CRITICAL for Android: Set explicit width
+                ]}
+                nestedScrollEnabled={Platform.OS === 'android'}
+                scrollEnabled={true}
+              >
+                {propertyImages.map((imageUri: string, index: number) => (
+                  <Image
+                    key={index}
+                    source={{ uri: imageUri }}
+                    style={[styles.carouselImage, { width: width - 40 }]} // CRITICAL for Android: Explicit width
+                    resizeMode="cover"
+                  />
+                ))}
+              </ScrollView>
+
+              {/* Pagination Dots */}
+              {propertyImages.length > 1 && (
+                <View style={styles.paginationDotsContainer}>
+                  {getVisibleDots().map(
+                    ({
+                      index,
+                      distance
+                    }: {
+                      index: number;
+                      distance: number;
+                    }) => {
+                      const dotStyle = getDotStyle(distance);
+                      if (dotStyle.display === "none") return null;
+
+                      // Ensure animated value exists
+                      if (!dotScaleAnims[index]) {
+                        const scale =
+                          distance === 0 ? 1 : distance === 1 ? 0.75 : 0.5;
+                        dotScaleAnims[index] = new Animated.Value(scale);
+                      }
+
+                      return (
+                        <Animated.View
+                          key={index}
+                          style={[
+                            styles.paginationDot,
+                            dotStyle,
+                            {
+                              transform: [{ scale: dotScaleAnims[index] }]
+                            }
+                          ]}
+                        />
+                      );
+                    }
+                  )}
+                </View>
+              )}
+            </>
+          ) : (
+            <View style={styles.placeholderImage}>
+              <MaterialIcons name="home" size={32} color="#E0E0E0" />
+            </View>
+          )}
+
+          {/* Heart icon */}
+          <TouchableOpacity style={styles.heartButton} onPress={toggleLike}>
+            <MaterialIcons
+              name={isLiked ? "favorite" : "favorite-border"}
+              size={20}
+              color={isLiked ? "#FF385C" : "#FFFFFF"}
+            />
+          </TouchableOpacity>
+
+          {/* Share button */}
+          <TouchableOpacity
+            style={styles.shareButton}
+            onPress={() => setShowShareSheet(true)}
+          >
+            <Share size={20} color="#FFFFFF" weight="bold" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.propertyContent}>
+          <View style={styles.titleRow}>
+            <Text style={styles.propertyTitle} numberOfLines={1}>
+              {propertyTitle}
+            </Text>
+          </View>
+
+          {/* Location Criteria as Detail */}
+          {locationCriteria && (
+            <View style={styles.locationCriteriaContainer}>
+              <MaterialIcons name="location-on" size={16} color="#717171" />
+              <Text style={styles.locationCriteriaText}>
+                {locationCriteria.displayName}
+              </Text>
+            </View>
+          )}
+
+          <Text style={styles.propertyPrice}>
+            {formatPrice(propertyPrice)} 1 {t("common.night")}
+          </Text>
+
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginTop: 4,
+              gap: 12
+            }}
+          >
+            <View style={styles.propertyRating}>
+              <MaterialIcons name="star" size={14} color="#222222" />
+              <Text style={styles.ratingText}>{propertyRating.toFixed(1)}</Text>
+            </View>
+            {property.host?.isVerified && (
+              <TouchableOpacity
+                style={styles.verifiedBadge}
+                onPress={() => setShowVerificationModal(true)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="check-circle" size={13} color="#FFFFFF" />
+                <Text style={styles.verifiedText}>{t("common.verified")}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* Verification Modal */}
+        <Modal
+          visible={showVerificationModal}
+          transparent={true}
+          animationType="none"
+          onRequestClose={() => setShowVerificationModal(false)}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => setShowVerificationModal(false)}
+          >
+            <View style={styles.modalContainer}>
+              <View style={styles.modalContent}>
+                {/* Large Verification Badge */}
+                <View style={styles.largeVerifiedBadge}>
+                  <MaterialIcons
+                    name="check-circle"
+                    size={32}
+                    color="#FFFFFF"
+                  />
+                  <Text style={styles.largeVerifiedText}>Verified Host</Text>
+                </View>
+
+                {/* Explanation */}
+                <Text style={styles.verificationTitle}>Identity Verified</Text>
+                <Text style={styles.verificationDescription}>
+                  This host has completed our identity verification process.
+                  They've provided government-issued ID and confirmed their
+                  identity, giving you extra confidence in your booking.
+                </Text>
+
+                {/* Close Button */}
+                <TouchableOpacity
+                  style={styles.closeButton}
+                  onPress={() => setShowVerificationModal(false)}
+                >
+                  <Text style={styles.closeButtonText}>Got it</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+        {/* Share Sheet Modal */}
+        <ShareSheet
+          visible={showShareSheet}
+          onClose={() => setShowShareSheet(false)}
+          property={property}
+        />
+
+        {/* Custom Toast */}
+        {/* Toast moved to screen level */}
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#FFFFFF"
+  },
+  searchContainer: {
+    // paddingHorizontal: 20,
+    // paddingTop: 20,
+    paddingBottom: 16
+  },
+  searchBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 25,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#E0E0E0"
+  },
+  searchText: {
+    fontSize: 16,
+    color: "#717171",
+    marginLeft: 12
+  },
+  categoryContainer: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0F0F0"
+  },
+  categoryItem: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 8,
+    position: "relative"
+  },
+  categoryItemSelected: {
+    // Selected state handled by underline
+  },
+  categoryIconContainer: {
+    position: "relative",
+    marginBottom: 4
+  },
+  newBadge: {
+    position: "absolute",
+    top: -8,
+    right: -8,
+    backgroundColor: "#FF5A5F",
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 2
+  },
+  newText: {
+    fontSize: 8,
+    color: "#FFFFFF",
+    fontWeight: "700"
+  },
+  categoryLabel: {
+    fontSize: 12,
+    color: "#717171",
+    fontWeight: "500"
+  },
+  categoryUnderline: {
+    position: "absolute",
+    bottom: 0,
+    left: "50%",
+    marginLeft: -15,
+    width: 30,
+    height: 2,
+    borderRadius: 1
+  },
+  content: {
+    flex: 1
+  },
+  section: {
+    marginBottom: 32
+  },
+  firstSection: {
+    marginTop: 20
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    marginBottom: 16
+  },
+  sectionTitleContainer: {
+    flex: 1
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#222222",
+    marginBottom: 2
+  },
+  propertyCountText: {
+    fontSize: 12,
+    color: "#717171",
+    fontWeight: "400"
+  },
+  viewAllButton: {
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  viewAllText: {
+    fontSize: 14,
+    color: "#222222",
+    fontWeight: "500",
+    marginRight: 4
+  },
+  propertiesScroll: {
+    paddingLeft: 20
+  },
+  propertiesScrollContent: {
+    // paddingRight: 20,
+  },
+  verticalScrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 20
+  },
+  twoColumnContainer: {
+    flexDirection: "column",
+    gap: 16
+  },
+  fullWidthPromo: {
+    width: "100%",
+    marginTop: 8,
+    marginBottom: 8
+  },
+  propertyCard: {
+    width: "100%",
+    marginBottom: 0,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: "#F0F0F0"
+  },
+  propertyCardTouchable: {
+    flex: 1
+  },
+  firstCard: {
+    marginTop: 0
+  },
+  lastCard: {
+    marginBottom: 0
+  },
+  propertyImageContainer: {
+    position: "relative",
+    height: 280,
+    width: "100%",
+    borderRadius: 0,
+    overflow: "hidden",
+    marginBottom: 0,
+    borderColor: "transparent",
+    borderWidth: 0
+  },
+  imageCarousel: {
+    width: "100%",
+    height: 280
+  },
+  imageCarouselContent: {
+    alignItems: "center"
+  },
+  carouselImage: {
+    height: 280,
+    width: width - 40,
+    borderRadius: 0,
+    flexShrink: 0 // CRITICAL for Android: Prevent shrinking
+  },
+  paginationDotsContainer: {
+    position: "absolute",
+    bottom: 8,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    zIndex: 2,
+    // Subtle background for visibility on light images
+    borderRadius: 12,
+    marginHorizontal: 8
+  },
+  paginationDot: {
+    borderRadius: 4
+  },
+  propertyImage: {
+    width: "100%",
+    height: "100%"
+  },
+  placeholderImage: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#F5F5F5",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  guestFavoriteBadge: {
+    position: "absolute",
+    top: 12,
+    left: 12,
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6
+  },
+  guestFavoriteText: {
+    fontSize: 10,
+    color: "#222222",
+    fontWeight: "600"
+  },
+  heartButton: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1
+  },
+  shareButton: {
+    position: "absolute",
+    top: 12,
+    right: 52,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1
+  },
+  propertyContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 16
+  },
+  locationCriteriaContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+    gap: 4
+  },
+  locationCriteriaText: {
+    fontSize: 13,
+    color: "#717171",
+    fontWeight: "500"
+  },
+  translationIconContainer: {
+    position: "absolute",
+    top: -8,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 4,
+    shadowColor: "#00A699",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+    zIndex: 10,
+    borderWidth: 1.5,
+    borderColor: "#00A699"
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 2
+  },
+  propertyTitle: {
+    fontSize: 16,
+    flexWrap: "wrap",
+    width: "100%",
+    flexShrink: 1,
+    flexGrow: 1,
+    fontWeight: "600",
+    color: "#222222",
+    flex: 1,
+    lineHeight: 22,
+    marginBottom: 6
+  },
+  verifiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#00A699",
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 10,
+    gap: 3
+  },
+  verifiedText: {
+    fontSize: 10,
+    color: "#FFFFFF",
+    fontWeight: "600"
+  },
+  // Verification Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-end"
+  },
+  modalContainer: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+    maxHeight: "50%"
+  },
+  modalContent: {
+    alignItems: "center"
+  },
+  largeVerifiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#00A699",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 25,
+    gap: 8,
+    marginBottom: 24
+  },
+  largeVerifiedText: {
+    fontSize: 16,
+    color: "#FFFFFF",
+    fontWeight: "700"
+  },
+  verificationTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#222222",
+    marginBottom: 12,
+    textAlign: "center"
+  },
+  verificationDescription: {
+    fontSize: 16,
+    color: "#717171",
+    lineHeight: 24,
+    textAlign: "center",
+    marginBottom: 24,
+    paddingHorizontal: 10
+  },
+  closeButton: {
+    backgroundColor: "#222222",
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
+    minWidth: 120
+  },
+  closeButtonText: {
+    fontSize: 16,
+    color: "#FFFFFF",
+    fontWeight: "600",
+    textAlign: "center"
+  },
+  propertyPrice: {
+    fontSize: 15,
+    color: "#222222",
+    marginBottom: 8,
+    fontWeight: "600"
+  },
+  propertyRating: {
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  ratingText: {
+    fontSize: 13,
+    color: "#222222",
+    marginLeft: 4,
+    fontWeight: "600"
+  },
+  loadingContainer: {
+    paddingVertical: 20,
+    alignItems: "center"
+  },
+  loadingText: {
+    fontSize: 14,
+    color: "#717171"
+  },
+  errorContainer: {
+    paddingVertical: 20,
+    alignItems: "center"
+  },
+  errorText: {
+    fontSize: 14,
+    color: "#FF5A5F"
+  },
+  errorSubtext: {
+    fontSize: 12,
+    color: "#717171",
+    marginTop: 4,
+    textAlign: "center"
+  },
+  promoCard: {
+    marginTop: 16,
+    marginBottom: 20,
+    marginHorizontal: 20,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#EAEAEA",
+    overflow: "hidden"
+  },
+  promoImage: {
+    height: 140,
+    backgroundColor: "#F5F5F5"
+  },
+  promoContent: {
+    padding: 16
+  },
+  promoTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#111827"
+  },
+  promoSubtitle: {
+    marginTop: 6,
+    color: "#6B7280",
+    lineHeight: 20,
+    fontSize: 11,
+    width: 250
+  },
+  promoCta: {
+    alignSelf: "flex-start",
+    marginTop: 12,
+    backgroundColor: "#111827",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10
+  },
+  promoCtaText: { color: "#FFFFFF", fontWeight: "700" },
+  emptyContainer: {
+    paddingVertical: 20,
+    alignItems: "center"
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "#717171"
+  },
+  // Skeleton Loading Styles
+  skeletonImage: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#F0F0F0",
+    borderRadius: 12
+  },
+  skeletonText1: {
+    height: 16,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 8,
+    width: "85%",
+    marginBottom: 8
+  },
+  skeletonText2: {
+    height: 14,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 6,
+    width: "70%",
+    marginBottom: 8
+  },
+  skeletonText3: {
+    height: 14,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 6,
+    width: "50%"
+  },
+  scrollToTopContainer: {
+    position: "absolute",
+    bottom: 20,
+    right: 20,
+    zIndex: 1000
+  },
+  scrollToTopButton: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: theme["color-temporary-primary"],
+    width: 60, // Smaller width like video button
+    height: 40, // Smaller height
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  // Video Section Styles
+  videoSection: {
+    marginTop: 20,
+    marginBottom: 32
+  },
+  videoSectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    marginBottom: 16
+  },
+  videoSectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#222222"
+  },
+  viewMoreButton: {
+    flexDirection: "row",
+    alignItems: "center"
+  },
+  viewMoreText: {
+    fontSize: 14,
+    color: "#222222",
+    fontWeight: "500",
+    marginRight: 4
+  },
+  videoScroll: {
+    paddingLeft: 20
+  },
+  videoScrollContent: {
+    paddingRight: 20
+  },
+  videoCard: {
+    width: width * 0.5,
+    marginRight: 12
+  },
+  videoContainer: {
+    position: "relative",
+    height: 280,
+    width: width * 0.5,
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: "#000"
+  },
+  videoPlayer: {
+    width: "100%",
+    height: "100%"
+  },
+  videoThumbnail: {
+    width: "100%",
+    height: "100%",
+    resizeMode: "cover"
+  },
+  videoPlaceholder: {
+    width: "100%",
+    height: "100%",
+    backgroundColor: "#333",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  playButton: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: [{ translateX: -20 }, { translateY: -20 }],
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 2
+  },
+  videoInfoOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 16,
+    zIndex: 1
+  },
+  videoTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginBottom: 4
+  },
+
+  durationBadge: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    zIndex: 2
+  },
+  durationText: {
+    fontSize: 12,
+    color: "#FFFFFF",
+    fontWeight: "600"
+  },
+  // Video Skeleton Styles
+  videoCardSkeleton: {
+    width: width * 0.6,
+    marginRight: 12
+  },
+  videoSkeleton: {
+    height: 280,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 16,
+    marginBottom: 12
+  },
+  videoInfoSkeleton: {
+    paddingHorizontal: 4
+  },
+  videoTitleSkeleton: {
+    height: 16,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 8,
+    width: "80%",
+    marginBottom: 8
+  },
+  videoSubtitleSkeleton: {
+    height: 14,
+    backgroundColor: "#F0F0F0",
+    borderRadius: 6,
+    width: "60%"
+  }
+});

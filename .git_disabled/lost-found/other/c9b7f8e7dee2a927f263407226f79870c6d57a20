@@ -1,0 +1,1404 @@
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  FlatList,
+  ActivityIndicator,
+  Platform,
+  Dimensions,
+  ScrollView,
+  TextInput
+} from "react-native";
+import {
+  GestureHandlerRootView,
+  GestureDetector,
+  Gesture
+} from "react-native-gesture-handler";
+import Animated, {
+  useAnimatedStyle,
+  useSharedValue,
+  runOnJS,
+  withTiming,
+  withSpring
+} from "react-native-reanimated";
+import * as Haptics from "expo-haptics";
+import { useTranslation } from "react-i18next";
+import {
+  Ruler,
+  Buildings,
+  MapTrifold,
+  MapPin,
+  CaretDown,
+  X,
+  Check,
+  CurrencyCircleDollar,
+  XCircle
+} from "phosphor-react-native";
+import { useQuery } from "react-query";
+import axios from "axios";
+import { endpoints } from "../constants";
+import { useLanguage } from "../contexts/LanguageContext";
+import { theme } from "../theme";
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+const MAX_DROPDOWN_HEIGHT = SCREEN_HEIGHT * 0.5;
+
+interface City {
+  id: number;
+  name: string;
+  name_ar: string;
+  zones?: Zone[];
+}
+
+interface Zone {
+  id: number;
+  name: string;
+  name_ar: string;
+  city_id: number;
+}
+
+interface Quartier {
+  id: number;
+  name: string;
+  name_ar: string;
+  zone_id: number;
+  parent_quartier_id?: number;
+}
+
+interface PropertySaleFilterBarProps {
+  onAreaChange?: (
+    minArea: number | undefined,
+    maxArea: number | undefined
+  ) => void;
+  onCityChange?: (
+    cityId: number | undefined,
+    cityName: string | undefined
+  ) => void;
+  onZoneChange?: (
+    zoneId: number | undefined,
+    zoneName: string | undefined
+  ) => void;
+  onQuartierChange?: (
+    quartierId: number | undefined,
+    quartierName: string | undefined
+  ) => void;
+  onPriceChange?: (
+    minPrice: number | undefined,
+    maxPrice: number | undefined
+  ) => void;
+  selectedArea?: { min?: number; max?: number };
+  selectedCityId?: number;
+  selectedZoneId?: number;
+  selectedQuartierId?: number;
+  selectedPriceRange?: { min?: number; max?: number };
+}
+
+const AREA_RANGES_BASE = [
+  { value: undefined, min: undefined, max: undefined },
+  { value: 100, min: 100, max: undefined },
+  { value: 200, min: 200, max: undefined },
+  { value: 300, min: 300, max: undefined },
+  { value: 400, min: 400, max: undefined },
+  { value: 500, min: 500, max: undefined },
+  { value: 600, min: 600, max: undefined },
+  { value: 700, min: 700, max: undefined },
+  { value: 800, min: 800, max: undefined },
+  { value: 900, min: 900, max: undefined },
+  { value: 1000, min: 1000, max: undefined },
+  { value: 1250, min: 1250, max: undefined },
+  { value: 1500, min: 1500, max: undefined },
+  { value: 1750, min: 1750, max: undefined },
+  { value: 2000, min: 2000, max: undefined },
+  { value: 2500, min: 2500, max: undefined },
+  { value: 3000, min: 3000, max: undefined },
+  { value: 3500, min: 3500, max: undefined },
+  { value: 4000, min: 4000, max: undefined },
+  { value: 4500, min: 4500, max: undefined },
+  { value: 5000, min: 5000, max: undefined },
+  { value: 5500, min: 5500, max: undefined },
+  { value: 6000, min: 6000, max: undefined },
+  { value: 6500, min: 6500, max: undefined },
+  { value: 7000, min: 7000, max: undefined },
+  { value: 7500, min: 7500, max: undefined }
+];
+
+const PriceRangeSlider = ({
+  min,
+  max,
+  minValue,
+  maxValue,
+  onMinChange,
+  onMaxChange
+}: any) => {
+  const SLIDER_WIDTH = SCREEN_WIDTH - 80;
+  const BAR_COUNT = 60;
+  const startMinPos = useSharedValue(0);
+  const startMaxPos = useSharedValue(0);
+
+  const minPos = useSharedValue(
+    ((minValue - min) / (max - min)) * SLIDER_WIDTH
+  );
+  const maxPos = useSharedValue(
+    ((maxValue - min) / (max - min)) * SLIDER_WIDTH
+  );
+
+  const [minInput, setMinInput] = useState("");
+  const [maxInput, setMaxInput] = useState("");
+  const [isMinFocused, setIsMinFocused] = useState(false);
+  const [isMaxFocused, setIsMaxFocused] = useState(false);
+
+  // Generate histogram data (bell curve simulation)
+  const histogramData = useMemo(() => {
+    const bars = [];
+    for (let i = 0; i < BAR_COUNT; i++) {
+      const x = (i / BAR_COUNT - 0.5) * 6;
+      const height = Math.exp(-(x * x) / 2) * 0.9 + Math.random() * 0.1;
+      bars.push(height);
+    }
+    return bars;
+  }, []);
+
+  useEffect(() => {
+    minPos.value = withTiming(((minValue - min) / (max - min)) * SLIDER_WIDTH, {
+      duration: 150
+    });
+    maxPos.value = withTiming(((maxValue - min) / (max - min)) * SLIDER_WIDTH, {
+      duration: 150
+    });
+
+    if (!isMinFocused) {
+      setMinInput(minValue > 0 ? minValue.toString() : "");
+    }
+    if (!isMaxFocused) {
+      setMaxInput(maxValue < max ? maxValue.toString() : "");
+    }
+  }, [minValue, maxValue, SLIDER_WIDTH, isMinFocused, isMaxFocused]);
+
+  const minGesture = Gesture.Pan()
+    .onBegin(() => {
+      startMinPos.value = minPos.value;
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
+    })
+    .onChange((event) => {
+      const newPos = Math.max(
+        0,
+        Math.min(startMinPos.value + event.translationX, maxPos.value - 30)
+      );
+      minPos.value = newPos;
+      const rawValue = min + (newPos / SLIDER_WIDTH) * (max - min);
+      const value = Math.round(rawValue / 100000) * 100000;
+      runOnJS(onMinChange)(Math.max(min, Math.min(value, max)));
+    })
+    .onEnd(() => {
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
+    });
+
+  const maxGesture = Gesture.Pan()
+    .onBegin(() => {
+      startMaxPos.value = maxPos.value;
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
+    })
+    .onChange((event) => {
+      const newPos = Math.max(
+        minPos.value + 30,
+        Math.min(startMaxPos.value + event.translationX, SLIDER_WIDTH)
+      );
+      maxPos.value = newPos;
+      const rawValue = min + (newPos / SLIDER_WIDTH) * (max - min);
+      const value = Math.round(rawValue / 100000) * 100000;
+      runOnJS(onMaxChange)(Math.max(min, Math.min(value, max)));
+    })
+    .onEnd(() => {
+      runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Light);
+    });
+
+  const minStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: minPos.value }]
+  }));
+
+  const maxStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: maxPos.value }]
+  }));
+
+  const rangeStyle = useAnimatedStyle(() => ({
+    left: minPos.value,
+    width: Math.max(0, maxPos.value - minPos.value)
+  }));
+
+  const handleMinInputChange = (text: string) => {
+    // Allow empty string and only numbers
+    if (text === "" || /^\d+$/.test(text)) {
+      setMinInput(text);
+      if (text === "") {
+        onMinChange(0);
+      } else {
+        const value = parseInt(text);
+        if (value >= min && value <= maxValue) {
+          onMinChange(value);
+        }
+      }
+    }
+  };
+
+  const handleMaxInputChange = (text: string) => {
+    // Allow empty string and only numbers
+    if (text === "" || /^\d+$/.test(text)) {
+      setMaxInput(text);
+      if (text === "") {
+        onMaxChange(max);
+      } else {
+        const value = parseInt(text);
+        if (value <= max && value >= minValue) {
+          onMaxChange(value);
+        }
+      }
+    }
+  };
+
+  const handleMinInputBlur = () => {
+    setIsMinFocused(false);
+    if (minInput === "" || minInput === "0") {
+      onMinChange(0);
+      setMinInput("");
+    } else {
+      const value = parseInt(minInput) || 0;
+      const clampedValue = Math.max(min, Math.min(value, maxValue));
+      onMinChange(clampedValue);
+      setMinInput(clampedValue.toString());
+    }
+  };
+
+  const handleMaxInputBlur = () => {
+    setIsMaxFocused(false);
+    if (maxInput === "") {
+      onMaxChange(max);
+      setMaxInput("");
+    } else {
+      const value = parseInt(maxInput) || max;
+      const clampedValue = Math.max(minValue, Math.min(value, max));
+      onMaxChange(clampedValue);
+      setMaxInput(clampedValue.toString());
+    }
+  };
+
+  const handleMinInputFocus = () => {
+    setIsMinFocused(true);
+    setMinInput(minValue > 0 ? minValue.toString() : "");
+  };
+
+  const handleMaxInputFocus = () => {
+    setIsMaxFocused(true);
+    setMaxInput(maxValue < max ? maxValue.toString() : "");
+  };
+
+  return (
+    <View style={priceSliderStyles.container}>
+      <Text style={priceSliderStyles.title}>Price range</Text>
+
+      <View style={priceSliderStyles.histogramContainer}>
+        {histogramData.map((height, i) => {
+          const barPos = (i / BAR_COUNT) * SLIDER_WIDTH;
+          return (
+            <Animated.View
+              key={i}
+              style={[
+                priceSliderStyles.histogramBar,
+                { height: height * 60 },
+                useAnimatedStyle(() => {
+                  const isInRange =
+                    barPos >= minPos.value && barPos <= maxPos.value;
+                  return {
+                    backgroundColor: withTiming(
+                      isInRange ? "#222222" : "#E7E7E7",
+                      { duration: 150 }
+                    )
+                  };
+                })
+              ]}
+            />
+          );
+        })}
+      </View>
+
+      <View style={priceSliderStyles.trackWrapper}>
+        <View style={priceSliderStyles.trackContainer}>
+          <View style={priceSliderStyles.track} />
+          <Animated.View style={[priceSliderStyles.activeTrack, rangeStyle]} />
+        </View>
+        <View style={priceSliderStyles.thumbsContainer}>
+          <GestureDetector gesture={minGesture}>
+            <Animated.View style={[priceSliderStyles.thumb, minStyle]} />
+          </GestureDetector>
+          <GestureDetector gesture={maxGesture}>
+            <Animated.View style={[priceSliderStyles.thumb, maxStyle]} />
+          </GestureDetector>
+        </View>
+      </View>
+
+      <View style={priceSliderStyles.priceRow}>
+        <View style={priceSliderStyles.priceBox}>
+          <Text style={priceSliderStyles.priceLabel}>Minimum</Text>
+          <View style={priceSliderStyles.inputWrapper}>
+            <Text style={priceSliderStyles.currencySymbol}>MRU</Text>
+            <TextInput
+              style={priceSliderStyles.priceInput}
+              value={minInput}
+              onChangeText={handleMinInputChange}
+              onFocus={handleMinInputFocus}
+              onBlur={handleMinInputBlur}
+              keyboardType="number-pad"
+              placeholder="0"
+              placeholderTextColor="#B0B0B0"
+              selectTextOnFocus
+            />
+          </View>
+        </View>
+        <View style={priceSliderStyles.separator} />
+        <View style={priceSliderStyles.priceBox}>
+          <Text style={priceSliderStyles.priceLabel}>Maximum</Text>
+          <View style={priceSliderStyles.inputWrapper}>
+            <Text style={priceSliderStyles.currencySymbol}>MRU</Text>
+            <TextInput
+              style={priceSliderStyles.priceInput}
+              value={maxInput}
+              onChangeText={handleMaxInputChange}
+              onFocus={handleMaxInputFocus}
+              onBlur={handleMaxInputBlur}
+              keyboardType="number-pad"
+              placeholder="Any"
+              placeholderTextColor="#B0B0B0"
+              selectTextOnFocus
+            />
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+};
+
+export const PropertySaleFilterBar: React.FC<PropertySaleFilterBarProps> = ({
+  onAreaChange,
+  onCityChange,
+  onZoneChange,
+  onQuartierChange,
+  onPriceChange,
+  selectedArea,
+  selectedCityId,
+  selectedZoneId,
+  selectedQuartierId,
+  selectedPriceRange
+}) => {
+  const { t } = useTranslation();
+  const { currentLanguage } = useLanguage();
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
+  const [selectedCity, setSelectedCity] = useState<City | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  const dropdownHeight = useSharedValue(0);
+  const dropdownOpacity = useSharedValue(0);
+
+  useEffect(() => {
+    if (activeDropdown) {
+      dropdownHeight.value = withTiming(MAX_DROPDOWN_HEIGHT, { duration: 250 });
+      dropdownOpacity.value = withTiming(1, { duration: 200 });
+      // Disable scroll when dropdown is open
+      scrollViewRef.current?.setNativeProps({ scrollEnabled: false });
+    } else {
+      dropdownHeight.value = withTiming(0, { duration: 200 });
+      dropdownOpacity.value = withTiming(0, { duration: 150 });
+      // Re-enable scroll when dropdown is closed
+      scrollViewRef.current?.setNativeProps({ scrollEnabled: true });
+    }
+  }, [activeDropdown]);
+
+  const { data: citiesData, isLoading: citiesLoading } = useQuery(
+    ["cities", currentLanguage || "en"],
+    async () => {
+      try {
+        if (!endpoints?.baseURL) return [];
+        const r = await axios.get(`${endpoints.baseURL}/cities`, {
+          timeout: 10000
+        });
+        return r.data?.data || [];
+      } catch {
+        return [];
+      }
+    },
+    {
+      retry: 1,
+      staleTime: 5 * 60 * 1000,
+      enabled: !!endpoints?.baseURL,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false
+    }
+  );
+
+  const { data: zonesData, isLoading: zonesLoading } = useQuery(
+    ["zones", selectedCityId, currentLanguage || "en"],
+    async () => {
+      if (!selectedCityId || !endpoints?.baseURL) return [];
+      try {
+        const r = await axios.get(
+          `${endpoints.baseURL}/cities/${selectedCityId}/zones`,
+          { timeout: 10000 }
+        );
+        return r.data?.data || [];
+      } catch {
+        return [];
+      }
+    },
+    {
+      enabled: !!selectedCityId && !!endpoints?.baseURL,
+      retry: 1,
+      staleTime: 5 * 60 * 1000,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false
+    }
+  );
+
+  const { data: quartiersData, isLoading: quartiersLoading } = useQuery(
+    ["quartiers", selectedZoneId, currentLanguage || "en"],
+    async () => {
+      if (!selectedZoneId || !endpoints?.baseURL) return [];
+      try {
+        const r = await axios.get(
+          `${endpoints.baseURL}/cities/zones/${selectedZoneId}/quartiers`,
+          { timeout: 10000 }
+        );
+        return r.data?.data || [];
+      } catch {
+        return [];
+      }
+    },
+    {
+      enabled: !!selectedZoneId && !!endpoints?.baseURL,
+      retry: 1,
+      staleTime: 5 * 60 * 1000,
+      refetchOnMount: false,
+      refetchOnWindowFocus: false
+    }
+  );
+
+  useEffect(() => {
+    if (selectedCityId && citiesData)
+      setSelectedCity(
+        citiesData.find((c: City) => c.id === selectedCityId) || null
+      );
+    else setSelectedCity(null);
+  }, [selectedCityId, citiesData]);
+
+  const getSquareMeterUnit = () => {
+    const lang = currentLanguage || "en";
+    return lang === "ar" ? "م²" : "m²";
+  };
+
+  const getAreaRanges = () => {
+    const unit = getSquareMeterUnit();
+    const anyLabel =
+      currentLanguage === "ar"
+        ? "الكل"
+        : currentLanguage === "fr"
+        ? "Tout"
+        : "Any";
+    return AREA_RANGES_BASE.map((item) => ({
+      ...item,
+      label: item.value === undefined ? anyLabel : `${item.value}+ ${unit}`
+    }));
+  };
+
+  const getAreaLabel = () => {
+    if (!selectedArea || (!selectedArea.min && !selectedArea.max))
+      return t("filters.area");
+    const unit = getSquareMeterUnit();
+    const ranges = getAreaRanges();
+    const range = ranges.find(
+      (r: any) => r.min === selectedArea.min && r.max === selectedArea.max
+    );
+    if (range) return range.label;
+    const infinity = currentLanguage === "ar" ? "∞" : "∞";
+    return `${selectedArea.min || 0}–${selectedArea.max || infinity} ${unit}`;
+  };
+
+  const getCityLabel = () => {
+    if (selectedCity) {
+      const lang = currentLanguage || "en";
+      return lang === "ar"
+        ? selectedCity.name_ar || selectedCity.name
+        : selectedCity.name || selectedCity.name_ar;
+    }
+    if (!selectedCityId || !citiesData) return t("filters.city");
+    const city = citiesData.find((c: City) => c.id === selectedCityId);
+    const lang = currentLanguage || "en";
+    return city
+      ? lang === "ar"
+        ? city.name_ar || city.name
+        : city.name || city.name_ar
+      : t("filters.city");
+  };
+
+  const getZoneLabel = () => {
+    if (!selectedZoneId || !zonesData) return t("filters.zone");
+    const zone = zonesData.find((z: Zone) => z.id === selectedZoneId);
+    const lang = currentLanguage || "en";
+    return zone
+      ? lang === "ar"
+        ? zone.name_ar || zone.name
+        : zone.name || zone.name_ar
+      : t("filters.zone");
+  };
+
+  const getQuartierLabel = () => {
+    if (!selectedQuartierId || !quartiersData) return t("filters.quartier");
+    const quartier = quartiersData.find(
+      (q: Quartier) => q.id === selectedQuartierId
+    );
+    const lang = currentLanguage || "en";
+    return quartier
+      ? lang === "ar"
+        ? quartier.name_ar || quartier.name
+        : quartier.name || quartier.name_ar
+      : t("filters.quartier");
+  };
+
+  const getPriceLabel = () => {
+    if (
+      !selectedPriceRange ||
+      (!selectedPriceRange.min && !selectedPriceRange.max)
+    ) {
+      return t("filters.price", "Price");
+    }
+    const formatPrice = (v: number) => {
+      if (v >= 1000000) {
+        const millions = v / 1000000;
+        return millions % 1 === 0
+          ? `${millions.toFixed(0)}M`
+          : `${millions.toFixed(1)}M`;
+      }
+      if (v >= 1000) return `${Math.round(v / 1000)}k`;
+      return v.toString();
+    };
+    const min = selectedPriceRange.min || 0;
+    const max = selectedPriceRange.max || 50000000;
+    if (min === 0 && max === 50000000) return t("filters.price", "Price");
+    return `${formatPrice(min)} - ${formatPrice(max)}`;
+  };
+
+  const handleAreaSelect = (range: {
+    min?: number;
+    max?: number;
+    [key: string]: any;
+  }) => {
+    onAreaChange?.(range.min, range.max);
+    setActiveDropdown(null);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleCitySelect = (city: City) => {
+    const lang = currentLanguage || "en";
+    const cityName =
+      lang === "ar" ? city.name_ar || city.name : city.name || city.name_ar;
+    setSelectedCity(city);
+    onCityChange?.(city.id, cityName);
+    setActiveDropdown(null);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleZoneSelect = (zone: Zone) => {
+    const lang = currentLanguage || "en";
+    const zoneName =
+      lang === "ar" ? zone.name_ar || zone.name : zone.name || zone.name_ar;
+    onZoneChange?.(zone.id, zoneName);
+    setActiveDropdown(null);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleQuartierSelect = (quartier: Quartier) => {
+    const lang = currentLanguage || "en";
+    const quartierName =
+      lang === "ar"
+        ? quartier.name_ar || quartier.name
+        : quartier.name || quartier.name_ar;
+    onQuartierChange?.(quartier.id, quartierName);
+    setActiveDropdown(null);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const [priceRange, setPriceRange] = useState<[number, number]>([0, 50000000]);
+
+  const handlePriceApply = () => {
+    onPriceChange?.(
+      priceRange[0] === 0 ? undefined : priceRange[0],
+      priceRange[1] === 50000000 ? undefined : priceRange[1]
+    );
+    setActiveDropdown(null);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const hasActiveFilters = useMemo(() => {
+    return !!(
+      selectedArea?.min ||
+      selectedArea?.max ||
+      selectedCityId ||
+      selectedZoneId ||
+      selectedQuartierId ||
+      selectedPriceRange?.min ||
+      selectedPriceRange?.max
+    );
+  }, [
+    selectedArea,
+    selectedCityId,
+    selectedZoneId,
+    selectedQuartierId,
+    selectedPriceRange
+  ]);
+
+  const handleClearAllFilters = () => {
+    setSelectedCity(null);
+    setPriceRange([0, 50000000]);
+    setActiveDropdown(null);
+    onAreaChange?.(undefined, undefined);
+    onCityChange?.(undefined, undefined);
+    onZoneChange?.(undefined, undefined);
+    onQuartierChange?.(undefined, undefined);
+    onPriceChange?.(undefined, undefined);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const dropdownAnimatedStyle = useAnimatedStyle(() => ({
+    height: dropdownHeight.value,
+    opacity: dropdownOpacity.value
+  }));
+
+  const backdropAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: dropdownOpacity.value * 0.4
+  }));
+
+  const ICON_SIZE = 16;
+
+  function renderDropdown() {
+    if (!activeDropdown) return null;
+    return (
+      <>
+        <TouchableOpacity
+          activeOpacity={1}
+          style={styles.backdrop}
+          onPress={() => setActiveDropdown(null)}
+        >
+          <Animated.View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: "#000" },
+              backdropAnimatedStyle
+            ]}
+          />
+        </TouchableOpacity>
+        <Animated.View style={[styles.dropdown, dropdownAnimatedStyle]}>
+          <View style={styles.dropdownContent}>
+            {activeDropdown === "area" && (
+              <FlatList
+                data={getAreaRanges()}
+                keyExtractor={(_, i) => `area-${i}`}
+                renderItem={({ item }) => {
+                  const isSelected =
+                    selectedArea?.min === item.min &&
+                    selectedArea?.max === item.max;
+                  return (
+                    <TouchableOpacity
+                      style={[
+                        styles.dropdownItem,
+                        isSelected && styles.dropdownItemSelected
+                      ]}
+                      onPress={() => handleAreaSelect(item)}
+                      activeOpacity={0.6}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownItemText,
+                          isSelected && styles.dropdownItemTextSelected
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {item.label}
+                      </Text>
+                      {isSelected && (
+                        <Check
+                          color={theme["color-temporary-primary"]}
+                          size={ICON_SIZE}
+                          weight="bold"
+                        />
+                      )}
+                    </TouchableOpacity>
+                  );
+                }}
+              />
+            )}
+            {activeDropdown === "city" &&
+              (citiesLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator
+                    size="small"
+                    color={theme["color-temporary-primary"]}
+                  />
+                </View>
+              ) : (
+                <FlatList
+                  data={citiesData || []}
+                  keyExtractor={(item: City) => `city-${item.id}`}
+                  renderItem={({ item }: { item: City }) => {
+                    const isSelected =
+                      selectedCityId === item.id ||
+                      selectedCity?.id === item.id;
+                    return (
+                      <TouchableOpacity
+                        style={[
+                          styles.dropdownItem,
+                          isSelected && styles.dropdownItemSelected
+                        ]}
+                        onPress={() => handleCitySelect(item)}
+                        activeOpacity={0.6}
+                      >
+                        <Text
+                          style={[
+                            styles.dropdownItemText,
+                            isSelected && styles.dropdownItemTextSelected
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {(currentLanguage || "en") === "ar"
+                            ? item.name_ar || item.name
+                            : item.name || item.name_ar}
+                        </Text>
+                        {isSelected && (
+                          <Check
+                            color={theme["color-temporary-primary"]}
+                            size={ICON_SIZE}
+                            weight="bold"
+                          />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              ))}
+            {activeDropdown === "zone" &&
+              (!selectedCityId ? (
+                <View style={styles.loadingContainer}>
+                  <Text style={styles.emptyText}>
+                    {t("filters.selectCityFirst")}
+                  </Text>
+                </View>
+              ) : zonesLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator
+                    size="small"
+                    color={theme["color-temporary-primary"]}
+                  />
+                </View>
+              ) : !zonesData || zonesData.length === 0 ? (
+                <View style={styles.loadingContainer}>
+                  <Text style={styles.emptyText}>
+                    {t("filters.noZonesAvailable", "No zones available")}
+                  </Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={zonesData || []}
+                  keyExtractor={(item: Zone) => `zone-${item.id}`}
+                  renderItem={({ item }: { item: Zone }) => {
+                    const isSelected = selectedZoneId === item.id;
+                    return (
+                      <TouchableOpacity
+                        style={[
+                          styles.dropdownItem,
+                          isSelected && styles.dropdownItemSelected
+                        ]}
+                        onPress={() => handleZoneSelect(item)}
+                        activeOpacity={0.6}
+                      >
+                        <Text
+                          style={[
+                            styles.dropdownItemText,
+                            isSelected && styles.dropdownItemTextSelected
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {(currentLanguage || "en") === "ar"
+                            ? item.name_ar || item.name
+                            : item.name || item.name_ar}
+                        </Text>
+                        {isSelected && (
+                          <Check
+                            color={theme["color-temporary-primary"]}
+                            size={ICON_SIZE}
+                            weight="bold"
+                          />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              ))}
+            {activeDropdown === "quartier" &&
+              (!selectedZoneId ? (
+                <View style={styles.loadingContainer}>
+                  <Text style={styles.emptyText}>
+                    {t("filters.selectZoneFirst")}
+                  </Text>
+                </View>
+              ) : quartiersLoading ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator
+                    size="small"
+                    color={theme["color-temporary-primary"]}
+                  />
+                </View>
+              ) : !quartiersData || quartiersData.length === 0 ? (
+                <View style={styles.loadingContainer}>
+                  <Text style={styles.emptyText}>
+                    {t(
+                      "filters.noQuartiersAvailable",
+                      "No quartiers available"
+                    )}
+                  </Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={quartiersData || []}
+                  keyExtractor={(item: Quartier) => `quartier-${item.id}`}
+                  renderItem={({ item }: { item: Quartier }) => {
+                    const isSelected = selectedQuartierId === item.id;
+                    return (
+                      <TouchableOpacity
+                        style={[
+                          styles.dropdownItem,
+                          isSelected && styles.dropdownItemSelected
+                        ]}
+                        onPress={() => handleQuartierSelect(item)}
+                        activeOpacity={0.6}
+                      >
+                        <Text
+                          style={[
+                            styles.dropdownItemText,
+                            isSelected && styles.dropdownItemTextSelected
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {(currentLanguage || "en") === "ar"
+                            ? item.name_ar || item.name
+                            : item.name || item.name_ar}
+                        </Text>
+                        {isSelected && (
+                          <Check
+                            color={theme["color-temporary-primary"]}
+                            size={ICON_SIZE}
+                            weight="bold"
+                          />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              ))}
+            {activeDropdown === "price" && (
+              <ScrollView
+                style={styles.priceScrollView}
+                contentContainerStyle={styles.priceDropdownContent}
+                bounces={false}
+                showsVerticalScrollIndicator={false}
+              >
+                <PriceRangeSlider
+                  min={0}
+                  max={50000000}
+                  minValue={priceRange[0]}
+                  maxValue={priceRange[1]}
+                  onMinChange={(v: number) => setPriceRange([v, priceRange[1]])}
+                  onMaxChange={(v: number) => setPriceRange([priceRange[0], v])}
+                />
+                <TouchableOpacity
+                  style={styles.applyPriceButton}
+                  onPress={handlePriceApply}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.applyPriceButtonText}>
+                    {t("filters.apply", "Apply")}
+                  </Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+          </View>
+        </Animated.View>
+      </>
+    );
+  }
+
+  return (
+    <View style={styles.wrapper}>
+      <ScrollView
+        ref={scrollViewRef}
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        bounces={false}
+        overScrollMode="never"
+        scrollEnabled={!activeDropdown}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.container}>
+          <TouchableOpacity
+            style={[styles.filterBtn, !!selectedArea && styles.filterBtnActive]}
+            onPress={() =>
+              setActiveDropdown(activeDropdown === "area" ? null : "area")
+            }
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.filterBtnText,
+                !!selectedArea && styles.filterBtnTextActive
+              ]}
+            >
+              {getAreaLabel()}
+            </Text>
+            <CaretDown
+              size={12}
+              color={selectedArea ? "#222" : "#717171"}
+              weight="bold"
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterBtn,
+              (!!selectedCityId || !!selectedCity) && styles.filterBtnActive
+            ]}
+            onPress={() =>
+              setActiveDropdown(activeDropdown === "city" ? null : "city")
+            }
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.filterBtnText,
+                (!!selectedCityId || !!selectedCity) &&
+                  styles.filterBtnTextActive
+              ]}
+            >
+              {getCityLabel()}
+            </Text>
+            <CaretDown
+              size={12}
+              color={selectedCityId || selectedCity ? "#222" : "#717171"}
+              weight="bold"
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterBtn,
+              !!selectedZoneId && styles.filterBtnActive,
+              !selectedCityId && styles.filterBtnDisabled
+            ]}
+            onPress={() =>
+              setActiveDropdown(
+                !selectedCityId
+                  ? null
+                  : activeDropdown === "zone"
+                  ? null
+                  : "zone"
+              )
+            }
+            disabled={!selectedCityId}
+            activeOpacity={!selectedCityId ? 1 : 0.7}
+          >
+            <Text
+              style={[
+                styles.filterBtnText,
+                !!selectedZoneId && styles.filterBtnTextActive,
+                !selectedCityId && styles.filterBtnTextDisabled
+              ]}
+            >
+              {getZoneLabel()}
+            </Text>
+            <CaretDown
+              size={12}
+              color={
+                selectedZoneId ? "#222" : !selectedCityId ? "#CCC" : "#717171"
+              }
+              weight="bold"
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterBtn,
+              !!selectedQuartierId && styles.filterBtnActive,
+              !selectedZoneId && styles.filterBtnDisabled
+            ]}
+            onPress={() =>
+              setActiveDropdown(
+                !selectedZoneId
+                  ? null
+                  : activeDropdown === "quartier"
+                  ? null
+                  : "quartier"
+              )
+            }
+            disabled={!selectedZoneId}
+            activeOpacity={!selectedZoneId ? 1 : 0.7}
+          >
+            <Text
+              style={[
+                styles.filterBtnText,
+                !!selectedQuartierId && styles.filterBtnTextActive,
+                !selectedZoneId && styles.filterBtnTextDisabled
+              ]}
+            >
+              {getQuartierLabel()}
+            </Text>
+            <CaretDown
+              size={12}
+              color={
+                selectedQuartierId
+                  ? "#222"
+                  : !selectedZoneId
+                  ? "#CCC"
+                  : "#717171"
+              }
+              weight="bold"
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterBtn,
+              !!(selectedPriceRange?.min || selectedPriceRange?.max) &&
+                styles.filterBtnActive
+            ]}
+            onPress={() => {
+              if (activeDropdown !== "price") setPriceRange([0, 50000000]);
+              setActiveDropdown(activeDropdown === "price" ? null : "price");
+            }}
+            activeOpacity={0.7}
+          >
+            <Text
+              style={[
+                styles.filterBtnText,
+                !!(selectedPriceRange?.min || selectedPriceRange?.max) &&
+                  styles.filterBtnTextActive
+              ]}
+            >
+              {getPriceLabel()}
+            </Text>
+            <CaretDown
+              size={12}
+              color={
+                selectedPriceRange?.min || selectedPriceRange?.max
+                  ? "#222"
+                  : "#717171"
+              }
+              weight="bold"
+            />
+          </TouchableOpacity>
+
+          {hasActiveFilters && (
+            <TouchableOpacity
+              style={styles.clearBtn}
+              onPress={handleClearAllFilters}
+              activeOpacity={0.7}
+            >
+              <XCircle
+                size={ICON_SIZE}
+                color={theme["color-temporary-primary"]}
+                weight="bold"
+              />
+              <Text style={styles.clearBtnText}>
+                {t("filters.clearAll", "Clear")}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </ScrollView>
+      {renderDropdown()}
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  wrapper: {
+    position: "relative",
+    zIndex: 101,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#DDDDDD"
+  },
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingVertical: 3
+  },
+  container: {
+    flexDirection: "row",
+    gap: 8
+  },
+  filterBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    // minWidth: 90,
+    backgroundColor: "#FFFFFF",
+    // borderWidth: 1,
+    // borderColor: "#DDDDDD",
+    borderRadius: 24,
+    paddingHorizontal: 12,
+    height: 34,
+    justifyContent: "center",
+    gap: 5
+  },
+  filterBtnActive: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#222222",
+    borderWidth: 1.5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1
+  },
+  filterBtnText: {
+    fontSize: 13,
+    color: "#222222",
+    fontWeight: "500",
+    flexShrink: 1,
+    letterSpacing: -0.2
+  },
+  filterBtnTextActive: {
+    color: "#222222",
+    fontWeight: "600"
+  },
+  filterBtnTextDisabled: {
+    color: "#B0B0B0"
+  },
+  filterBtnDisabled: {
+    opacity: 0.5
+  },
+  clearBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1,
+    borderColor: theme["color-temporary-primary"],
+    borderRadius: 24,
+    paddingHorizontal: 12,
+    height: 34,
+    justifyContent: "center",
+    gap: 5
+  },
+  clearBtnText: {
+    fontSize: 13,
+    color: theme["color-temporary-primary"],
+    fontWeight: "600",
+    letterSpacing: -0.2
+  },
+  backdrop: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    bottom: -SCREEN_HEIGHT * 2,
+    zIndex: 1200
+  },
+  dropdown: {
+    position: "absolute",
+    top: "100%",
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderTopColor: "#E7E7E7",
+    overflow: "hidden",
+    zIndex: 1201,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12
+      },
+      android: {
+        elevation: 4
+      }
+    })
+  },
+  dropdownContent: {
+    flex: 1
+  },
+  dropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+    minHeight: 44,
+    backgroundColor: "transparent"
+  },
+  dropdownItemSelected: {
+    backgroundColor: "#F7F7F7"
+  },
+  dropdownItemText: {
+    fontSize: 15,
+    color: "#222222",
+    fontWeight: "400",
+    flex: 1,
+    marginRight: 12,
+    letterSpacing: -0.2
+  },
+  dropdownItemTextSelected: {
+    color: theme["color-temporary-primary"],
+    fontWeight: "600"
+  },
+  loadingContainer: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40,
+    backgroundColor: "#FFFFFF"
+  },
+  emptyText: {
+    fontSize: 14,
+    color: "#717171",
+    fontWeight: "400"
+  },
+  priceScrollView: {
+    flex: 1
+  },
+  priceDropdownContent: {
+    padding: 24,
+    paddingBottom: 32
+  },
+  applyPriceButton: {
+    backgroundColor: "#222222",
+    borderRadius: 8,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 16
+  },
+  applyPriceButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "600",
+    letterSpacing: -0.2
+  }
+});
+
+const priceSliderStyles = StyleSheet.create({
+  container: {
+    marginTop: 0,
+    marginBottom: 0
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: "600",
+    color: "#222222",
+    marginBottom: 20,
+    letterSpacing: -0.5
+  },
+  histogramContainer: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    height: 60,
+    gap: 2,
+    marginBottom: 12
+  },
+  histogramBar: {
+    flex: 1,
+    borderRadius: 1,
+    backgroundColor: "#E7E7E7"
+  },
+  trackWrapper: {
+    position: "relative",
+    marginBottom: 24,
+    paddingVertical: 16
+  },
+  trackContainer: {
+    height: 2,
+    justifyContent: "center",
+    position: "relative"
+  },
+  track: {
+    height: 2,
+    backgroundColor: "#E7E7E7",
+    borderRadius: 1
+  },
+  activeTrack: {
+    position: "absolute",
+    height: 2,
+    backgroundColor: "#222222",
+    borderRadius: 1
+  },
+  thumbsContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0
+  },
+  thumb: {
+    position: "absolute",
+    top: 15,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    borderWidth: 2,
+    borderColor: "#222222",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 5,
+    marginTop: -15
+  },
+  priceRow: {
+    flexDirection: "row",
+    gap: 0,
+    borderTopWidth: 1,
+    borderTopColor: "#E7E7E7",
+    paddingTop: 20,
+    marginBottom: 8
+  },
+  priceBox: {
+    flex: 1
+  },
+  separator: {
+    width: 1,
+    backgroundColor: "#E7E7E7",
+    marginVertical: 8
+  },
+  priceLabel: {
+    fontSize: 12,
+    color: "#717171",
+    marginBottom: 8,
+    fontWeight: "600"
+  },
+  inputWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E7E7E7",
+    paddingBottom: 8
+  },
+  currencySymbol: {
+    fontSize: 16,
+    color: "#717171",
+    fontWeight: "400",
+    marginRight: 4
+  },
+  priceInput: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: "400",
+    color: "#222222",
+    padding: 0,
+    margin: 0
+  }
+});

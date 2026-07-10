@@ -1,0 +1,335 @@
+import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider } from "react-native-safe-area-context";
+import * as eva from "@eva-design/eva";
+import { ApplicationProvider } from "@ui-kitten/components";
+import { QueryClient, QueryClientProvider } from "react-query";
+import { useState, useEffect } from "react";
+import * as SecureStore from "expo-secure-store";
+import { LogBox, AppState, View, Text } from "react-native";
+import * as Notifications from "expo-notifications";
+import * as SplashScreen from "expo-splash-screen";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+
+import useCachedResources from "./hooks/useCachedResources";
+import useColorScheme from "./hooks/useColorScheme";
+import Navigation from "./navigation";
+import { theme } from "./theme";
+import { AuthContext, LoadingContext } from "./context";
+import { User } from "./types/user";
+import { socket } from "./constants/socket";
+import { queryKeys } from "./constants";
+import { refreshTokens } from "./services/tokens";
+import { HostModeProvider } from "./contexts/HostModeContext";
+import { LanguageProvider } from "./contexts/LanguageContext";
+import { NotificationProvider } from "./contexts/NotificationContext";
+import { StoryViewerProvider } from "./contexts/StoryViewerContext";
+import { OnboardingScreen } from "./screens/OnboardingScreen";
+import { useOnboarding } from "./hooks/useOnboarding";
+import { AppInitializer } from "./components/AppInitializer";
+import { SplashLoadingScreen } from "./components/SplashLoadingScreen";
+import { registerDeviceSilently, updateDeviceRegistrationOnLogin, startDeviceSession, endDeviceSession } from "./services/deviceRegistration";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { crashReporting } from "./services/crashReporting";
+import "./i18n";
+
+// CRITICAL: Initialize crash reporting SYNCHRONOUSLY at module load
+// This runs BEFORE React renders, so it can catch crashes during initialization
+try {
+  crashReporting.setupCrashReporting();
+} catch (error) {
+  console.error('❌ Failed to setup crash reporting at module load:', error);
+}
+
+// CRITICAL: Send queued crash logs from previous app sessions
+// This runs asynchronously so it doesn't block app startup
+setTimeout(() => {
+  crashReporting.sendQueuedLogs().catch((e) => {
+    console.error('Failed to send queued logs:', e);
+  });
+}, 2000); // Wait 2 seconds after app starts to send queued logs
+
+const queryClient = new QueryClient();
+LogBox.ignoreAllLogs();
+
+export default function App() {
+
+  const isLoadingComplete = useCachedResources();
+  const colorScheme = useColorScheme();
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [isUserLoaded, setIsUserLoaded] = useState<boolean>(false);
+
+  useEffect(() => {
+    async function getUser() {
+      try {
+        const user = await SecureStore.getItemAsync("user");
+        if (user) {
+          const userObj: User = JSON.parse(user);
+          
+          // CRITICAL: Wrap refreshTokens in try-catch to prevent crashes
+          try {
+            const newTokens = await refreshTokens(userObj.refreshToken);
+            if (newTokens) {
+              userObj.accessToken = newTokens.accessToken;
+              userObj.refreshToken = newTokens.refreshToken;
+              SecureStore.setItemAsync("user", JSON.stringify(userObj));
+            }
+          } catch (tokenError) {
+            console.warn('⚠️ Token refresh failed, using existing tokens:', tokenError);
+            // Continue with existing tokens - don't crash the app
+          }
+          
+          console.log('🔄 APP LOADING USER FROM STORAGE: allowsNotifications =', userObj.allowsNotifications);
+          setUser(userObj);
+
+          // CRITICAL: Wrap socket operations in try-catch
+          try {
+            socket.auth = {
+              userID: userObj.ID,
+              username:
+                userObj.firstName && userObj.lastName
+                  ? `${userObj.firstName} ${userObj.lastName}`
+                  : `${userObj.email}`,
+              accessToken: userObj.accessToken,
+            };
+
+            socket.connect();
+          } catch (socketError) {
+            console.warn('⚠️ Socket connection failed:', socketError);
+            // Don't crash - socket will retry later
+          }
+          
+          // Update device registration with user ID (silent background operation)
+          // This will update existing device record with user ID, not create new one
+          updateDeviceRegistrationOnLogin(userObj.ID).catch(() => {});
+        }
+        // Note: Device registration is handled after splash screen to avoid duplicate calls
+      } catch (error) {
+        console.error('❌ Failed to load user:', error);
+        crashReporting.logError(error as Error, {
+          phase: 'app_mount',
+          screen: 'App',
+          context: 'getUser'
+        });
+        // Note: Device registration is handled after splash screen
+      } finally {
+        setIsUserLoaded(true);
+      }
+    }
+    
+    getUser().then(() => {
+      // CRITICAL: Setup socket listeners with proper error handling
+      try {
+        socket.on(
+          "getMessage",
+          async (data: {
+            senderID: number;
+            senderName: string;
+            conversationID: number;
+            text: string;
+          }) => {
+            queryClient.invalidateQueries(queryKeys.conversations);
+            queryClient.invalidateQueries(queryKeys.selectedConversation);
+
+            try {
+              const { status } = await Notifications.getPermissionsAsync();
+              if (status !== 'granted') {
+                console.log('🔕 Notification skipped: permission not granted');
+                return;
+              }
+              await Notifications.scheduleNotificationAsync({
+                content: {
+                  title: data.senderName,
+                  body: data.text,
+                  data: {
+                    url: `exp://192.168.30.24:19000/--/messages/${data.conversationID}/${data.senderName}`,
+                  },
+                },
+                trigger: null,
+              });
+            } catch (error) {
+              console.warn('⚠️ Failed to schedule incoming message notification:', error);
+            }
+          }
+        );
+        
+        socket.on("session", (data: { sessionID: string }) => {
+          try {
+            socket.auth = { sessionID: data.sessionID };
+            // Use functional update to get latest user state
+            setUser((currentUser) => {
+              if (currentUser) {
+                const updatedUser = { ...currentUser };
+                updatedUser.sessionID = data.sessionID;
+                SecureStore.setItemAsync("user", JSON.stringify(updatedUser)).catch(() => {});
+                return updatedUser;
+              }
+              return currentUser;
+            });
+          } catch (error) {
+            console.warn('⚠️ Failed to handle session:', error);
+          }
+        });
+
+        socket.on("connect_error", (err) => {
+          try {
+            // Use functional update to get latest user state
+            setUser((currentUser) => {
+              if (err.message === "Invalid userID" && currentUser) {
+                socket.auth = {
+                  userID: currentUser.ID,
+                  username:
+                    currentUser.firstName && currentUser.lastName
+                      ? `${currentUser.firstName} ${currentUser.lastName}`
+                      : `${currentUser.phoneNumber || currentUser.email}`,
+                };
+                socket.connect();
+              }
+              return currentUser;
+            });
+          } catch (error) {
+            console.warn('⚠️ Failed to handle connect_error:', error);
+          }
+        });
+      } catch (error) {
+        console.error('❌ Failed to setup socket listeners:', error);
+        crashReporting.logError(error as Error, {
+          phase: 'app_mount',
+          screen: 'App',
+          context: 'socket_setup'
+        });
+      }
+    }).catch((error) => {
+      console.error('❌ getUser promise rejected:', error);
+      crashReporting.logError(error as Error, {
+        phase: 'app_mount',
+        screen: 'App',
+        context: 'getUser_promise'
+      });
+      setIsUserLoaded(true); // Ensure we don't get stuck on loading screen
+    });
+
+    return () => {
+      try {
+        // CRITICAL FIX: Typo - "getMesssage" -> "getMessage"
+        socket.off("getMessage");
+        socket.off("session");
+        socket.off("connect_error");
+      } catch (error) {
+        console.warn('⚠️ Failed to cleanup socket listeners:', error);
+      }
+    };
+  }, []); // Empty deps - only run once on mount
+
+  // Hide splash screen once resources and user are loaded
+  useEffect(() => {
+    if (isLoadingComplete && isUserLoaded) {
+      // Small delay to ensure smooth transition
+      const hideSplash = async () => {
+        try {
+          await SplashScreen.hideAsync();
+        } catch (error) {
+          console.warn('⚠️ Failed to hide splash screen:', error);
+        }
+      };
+      // Small delay to ensure UI is ready
+      setTimeout(hideSplash, 100);
+      
+      // Register device silently in background (non-blocking)
+      // This runs after app is loaded to avoid any impact on launch time
+      setTimeout(() => {
+        registerDeviceSilently().catch(() => {});
+        // Start device session tracking
+        startDeviceSession().catch(() => {});
+      }, 500);
+    }
+  }, [isLoadingComplete, isUserLoaded]);
+
+  // Track app state changes to end sessions when app goes to background
+  useEffect(() => {
+    let currentAppState = AppState.currentState;
+    
+    const handleAppStateChange = (nextAppState: string) => {
+      // Prevent duplicate calls for the same state
+      if (currentAppState === nextAppState) {
+        return;
+      }
+      
+      currentAppState = nextAppState;
+      
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        // App going to background - end session
+        endDeviceSession().catch(() => {});
+      } else if (nextAppState === 'active') {
+        // App coming to foreground - start new session
+        // Small delay to ensure previous session was properly ended
+        setTimeout(() => {
+          startDeviceSession().catch(() => {});
+        }, 100);
+      }
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+
+    // End session when component unmounts (app closing)
+    return () => {
+      subscription.remove();
+      endDeviceSession().catch(() => {});
+    };
+  }, []);
+
+  // Show loading screen until everything is ready
+  if (!isLoadingComplete || !isUserLoaded) {
+    return <SplashLoadingScreen />;
+  }
+
+  // CRITICAL: Wrap entire render in try-catch for additional safety
+  try {
+    return (
+      <ErrorBoundary>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <AppInitializer>
+            <NotificationProvider>
+              <LoadingContext.Provider value={{ loading, setLoading }}>
+                <AuthContext.Provider value={{ user, setUser }}>
+                  <QueryClientProvider client={queryClient}>
+                    <ApplicationProvider {...eva} theme={theme}>
+                      <SafeAreaProvider>
+                        <HostModeProvider>
+                          <StoryViewerProvider>
+                            <Navigation colorScheme={colorScheme} />
+                            <StatusBar />
+                          </StoryViewerProvider>
+                        </HostModeProvider>
+                      </SafeAreaProvider>
+                    </ApplicationProvider>
+                  </QueryClientProvider>
+                </AuthContext.Provider>
+              </LoadingContext.Provider>
+            </NotificationProvider>
+          </AppInitializer>
+        </GestureHandlerRootView>
+      </ErrorBoundary>
+    );
+  } catch (error) {
+    // CRITICAL: Log render error and show fallback UI
+    console.error('❌ App render error:', error);
+    crashReporting.logError(error as Error, {
+      phase: 'render',
+      screen: 'App',
+      context: 'main_render'
+    });
+    
+    // Return minimal fallback UI
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <Text style={{ fontSize: 18, fontWeight: '600', color: '#DC2626', marginBottom: 12 }}>
+          ⚠️ App Error
+        </Text>
+        <Text style={{ fontSize: 14, color: '#6B7280', textAlign: 'center' }}>
+          Please restart the app
+        </Text>
+      </View>
+    );
+  }
+}

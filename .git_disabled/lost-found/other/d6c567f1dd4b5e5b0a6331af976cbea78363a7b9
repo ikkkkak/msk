@@ -1,0 +1,4816 @@
+import React, {
+  useMemo,
+  useState,
+  useRef,
+  useCallback,
+  useEffect
+} from "react";
+import {
+  View,
+  ScrollView,
+  Image,
+  StyleSheet,
+  Dimensions,
+  TouchableOpacity,
+  ActivityIndicator,
+  Linking,
+  Animated,
+  SafeAreaView,
+  Share,
+  TextInput,
+  Modal,
+  Alert,
+  Pressable
+} from "react-native";
+import { Text, Button } from "@ui-kitten/components";
+import axios from "axios";
+import { useQuery } from "react-query";
+import { useRoute, useNavigation } from "@react-navigation/native";
+import { endpoints } from "../constants";
+import MapView, { Marker } from "react-native-maps";
+import { Video, ResizeMode, AVPlaybackStatus } from "expo-av";
+import { useUser } from "../hooks/useUser";
+import { api } from "../services/api";
+import { useQueryClient } from "react-query";
+import { usePropertyBehaviorTracking } from "../hooks/usePropertyBehaviorTracking";
+import { setFavoriteCity, getFavoriteCity } from "../services/favoriteCity";
+import {
+  Bed,
+  Bathtub,
+  Play,
+  Pause,
+  Ruler,
+  Info,
+  Phone,
+  Envelope,
+  ChatCircle,
+  X,
+  CaretRight,
+  CaretDown,
+  CaretUp,
+  ShareNetwork,
+  Heart,
+  DotsThreeVertical,
+  ArrowLeft,
+  MapPin,
+  Calendar,
+  Check,
+  Buildings,
+  House,
+  SpeakerHigh,
+  SpeakerSlash,
+  CornersOut,
+  Flag,
+  ProhibitInset,
+  Eye,
+  EyeSlash,
+  Warning,
+  Trash,
+  Question,
+  PencilSimpleIcon,
+  PencilSimple,
+  CookingPot,
+  Couch,
+  Door,
+  Toilet,
+  ForkKnife,
+  Rectangle,
+  BookOpen,
+  Car,
+  Tree,
+  Camera,
+  GraduationCap,
+  FirstAid
+} from "phosphor-react-native";
+import { MaterialIcons } from "@expo/vector-icons";
+import { theme } from "../theme";
+import { useTranslation } from "react-i18next";
+import Toast from "../components/CustomToast";
+import { useLanguage } from "../contexts/LanguageContext";
+import { getAppLanguage } from "../utils/translation";
+import { RootStackParamList } from "../types";
+import * as Haptics from "expo-haptics";
+import { OfferPriceChart } from "../components/OfferPriceChart";
+import { DraggableBottomSheet } from "../components/DraggableBottomSheet";
+// Loading Skeleton Component
+const Skeleton = ({
+  width = "100%",
+  height = 20,
+  style = {}
+}: {
+  width?: number | string;
+  height?: number;
+  style?: any;
+}) => <View style={[styles.skeleton, { width, height } as any, style]} />;
+// Empty State Component
+const EmptyState = ({
+  icon,
+  title,
+  subtitle
+}: {
+  icon: string;
+  title: string;
+  subtitle: string;
+}) => (
+  <View style={styles.emptyState}>
+    <Text style={styles.emptyIcon}>{icon}</Text>
+    <Text style={styles.emptyTitle}>{title}</Text>
+    <Text style={styles.emptySubtitle}>{subtitle}</Text>
+  </View>
+);
+
+// Move in-component hook usage for OfferInsights OUTSIDE the main render/component tree!
+const useOfferInsights = (propertyId: number) => {
+  const [selectedView, setSelectedView] = useState<"lowest" | "highest" | null>(
+    null
+  );
+  const { t } = useTranslation();
+  const { data: insights } = useQuery({
+    queryKey: ["offer-insights", propertyId],
+    queryFn: async () => {
+      const res = await axios.get(
+        `${endpoints.propertySales}/${propertyId}/offer-insights`
+      );
+      return res.data;
+    },
+    enabled: !!propertyId
+  });
+  return { selectedView, setSelectedView, insights, t };
+};
+
+const OfferInsights: React.FC<{ propertyId: number }> = ({ propertyId }) => {
+  const { selectedView, setSelectedView, insights, t } =
+    useOfferInsights(propertyId);
+  if (!insights?.offers) return null;
+  const o = insights.offers;
+
+  const getDisplayPrice = () => {
+    if (selectedView === "lowest") return o.lowest;
+    if (selectedView === "highest") return o.highest;
+    return o.average;
+  };
+  const getDisplayLabel = () => {
+    if (selectedView === "lowest") return t("sale.lowestOffer");
+    if (selectedView === "highest") return t("sale.highestOffer");
+    return t("sale.averageOffer");
+  };
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>{t("sale.offerInsights")}</Text>
+      {/* Main Price Display */}
+      <View style={styles.mainPriceContainer}>
+        <Text style={styles.mainPriceLabel}>{getDisplayLabel()}</Text>
+        <Text style={styles.mainPriceValue}>
+          MRU {Number(getDisplayPrice()).toLocaleString()}
+        </Text>
+      </View>
+      {/* Clickable Options */}
+      <View style={styles.insightOptions}>
+        <TouchableOpacity
+          style={[
+            styles.insightOption,
+            selectedView === "lowest" && styles.insightOptionSelected
+          ]}
+          onPress={() =>
+            setSelectedView(selectedView === "lowest" ? null : "lowest")
+          }
+        >
+          <Text
+            style={[
+              styles.insightOptionText,
+              selectedView === "lowest" && styles.insightOptionTextSelected
+            ]}
+          >
+            {t("sale.lowest")}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.insightOption,
+            selectedView === "highest" && styles.insightOptionSelected
+          ]}
+          onPress={() =>
+            setSelectedView(selectedView === "highest" ? null : "highest")
+          }
+        >
+          <Text
+            style={[
+              styles.insightOptionText,
+              selectedView === "highest" && styles.insightOptionTextSelected
+            ]}
+          >
+            {t("sale.highest")}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      <Text style={styles.insightNote}>
+        {t("sale.offerNote", { count: o.count })}
+      </Text>
+    </View>
+  );
+};
+
+export const PropertySaleDetailsScreen = () => {
+  // 1. All hooks at top level, always called in the same order!
+  const route = useRoute<any>();
+  const navigation = useNavigation();
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+  const { t } = useTranslation();
+  const { currentLanguage } = useLanguage();
+
+  const id = Number(route?.params?.propertyId);
+  const lang = (currentLanguage || getAppLanguage()).toLowerCase();
+
+  const [showOptionsModal, setShowOptionsModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showBlockModal, setShowBlockModal] = useState(false);
+  const [reportReason, setReportReason] = useState<string>("");
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactModalData, setContactModalData] = useState<{
+    phone?: string;
+    email?: string;
+    ownerID?: number;
+    organizationName?: string;
+    organizationImage?: string;
+    organizationWebsite?: string;
+    recipientName?: string;
+    hostAvatarURL?: string;
+  } | null>(null);
+  const [imgIndex, setImgIndex] = useState(0);
+  const [activeTab, setActiveTab] = useState<
+    "schools" | "hospitals" | "restaurants"
+  >("schools");
+  const [heroMediaTab, setHeroMediaTab] = useState<"gallery" | "video">(
+    "gallery"
+  );
+  const [showVideoFullscreenModal, setShowVideoFullscreenModal] =
+    useState(false);
+  const fullscreenVideoRef = useRef<Video>(null);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(true);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error" | "info";
+    duration?: number;
+  } | null>(null);
+
+  // View More/Less for description
+  const [showFullDescription, setShowFullDescription] = useState(false);
+  const [showFullFeatures, setShowFullFeatures] = useState(false);
+
+  // Video player controls state
+  const [showVideoControls, setShowVideoControls] = useState(true);
+  const [videoPosition, setVideoPosition] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [isVideoMuted, setIsVideoMuted] = useState(false);
+  const [videoVolume, setVideoVolume] = useState(1.0);
+  const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Floor plan state - simplified to prevent crashes
+  const [selectedFloorPlan, setSelectedFloorPlan] = useState<any | null>(null);
+  const [showFloorPlanModal, setShowFloorPlanModal] = useState(false);
+
+  // Image gallery/modal
+  const [showGalleryModal, setShowGalleryModal] = useState(false);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const galleryRef = useRef<ScrollView>(null);
+
+  // Floor plan image gallery modal
+  const [showFloorPlanGallery, setShowFloorPlanGallery] = useState(false);
+  const [selectedFloorPlanImageIndex, setSelectedFloorPlanImageIndex] =
+    useState(0);
+  const [floorPlanImages, setFloorPlanImages] = useState<string[]>([]);
+  const floorPlanGalleryRef = useRef<ScrollView>(null);
+
+  const width = Dimensions.get("window").width;
+
+  const HERO_HEIGHT = 360;
+  const scrollY = useRef(new Animated.Value(0)).current;
+
+  const headerOpacity = scrollY.interpolate({
+    inputRange: [0, HERO_HEIGHT * 0.5, HERO_HEIGHT * 0.7],
+    outputRange: [0, 0, 1],
+    extrapolate: "clamp"
+  });
+  const heroScale = scrollY.interpolate({
+    inputRange: [-HERO_HEIGHT, 0],
+    outputRange: [1.4, 1],
+    extrapolateRight: "clamp"
+  });
+
+  // Data fetching hooks must always be called
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["property-sale", id, lang],
+    queryFn: async () => {
+      console.log("🔍 Fetching property sale with ID:", id, "Lang:", lang);
+      const res = await axios.get(
+        `${endpoints.propertySales}/public/${id}?lang=${lang}`
+      );
+      console.log("📦 Raw response:", res.data);
+      const propertyData =
+        res.data?.property || res.data?.property_sale || res.data;
+      console.log("🏠 Property data:", propertyData);
+      return propertyData;
+    },
+    enabled: !!id // Remove the accessToken requirement for public property sales
+  });
+  const images: string[] = useMemo(() => {
+    const arr = Array.isArray(data?.images) ? data.images : [];
+    return arr.filter(Boolean);
+  }, [data]);
+
+  // Behavior tracking
+  const { trackClick, trackFavorite, trackContact } = usePropertyBehaviorTracking(
+    data?.id,
+    "sale",
+    data?.city_id,
+    data?.city,
+    data?.zone_id,
+    data?.zone_name
+  );
+
+  // Favorite city state
+  const [isFavoriteCity, setIsFavoriteCity] = useState(false);
+  const [isSettingFavoriteCity, setIsSettingFavoriteCity] = useState(false);
+
+  // Check if current property city matches favorite city
+  useEffect(() => {
+    const checkFavoriteCity = async () => {
+      if (!user || !data?.city) return;
+      try {
+        const favoriteCity = await getFavoriteCity();
+        if (favoriteCity?.cityName === data.city || favoriteCity?.cityId === data.city_id) {
+          setIsFavoriteCity(true);
+        } else {
+          setIsFavoriteCity(false);
+        }
+      } catch (error) {
+        console.log("Failed to check favorite city:", error);
+      }
+    };
+    checkFavoriteCity();
+  }, [user, data?.city, data?.city_id]);
+
+  // Handle favorite city toggle
+  const handleToggleFavoriteCity = async () => {
+    if (!user || !data) {
+      setToast({
+        message: t("sale.loginRequired", "Please login to set favorite city"),
+        type: "info",
+      });
+      return;
+    }
+
+    setIsSettingFavoriteCity(true);
+    try {
+      if (isFavoriteCity) {
+        // Remove favorite city
+        await setFavoriteCity(undefined, undefined, undefined, undefined);
+        setIsFavoriteCity(false);
+        setToast({
+          message: t("sale.favoriteCityRemoved", "Favorite city removed"),
+          type: "success",
+        });
+      } else {
+        // Set favorite city
+        await setFavoriteCity(
+          data.city_id,
+          data.city,
+          data.zone_id,
+          data.zone_name
+        );
+        setIsFavoriteCity(true);
+        setToast({
+          message: t("sale.favoriteCitySet", "Favorite city set! You'll receive notifications for new properties here."),
+          type: "success",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to set favorite city:", error);
+      setToast({
+        message: t("sale.favoriteCityError", "Failed to update favorite city"),
+        type: "error",
+      });
+    } finally {
+      setIsSettingFavoriteCity(false);
+    }
+  };
+  const { data: nearby, isLoading: nearbyLoading } = useQuery({
+    queryKey: ["nearby", data?.latitude, data?.longitude],
+    queryFn: async () => {
+      if (
+        typeof data?.latitude !== "number" ||
+        typeof data?.longitude !== "number"
+      )
+        return null;
+      const res = await axios.get(
+        `${endpoints.nearby}?lat=${data.latitude}&lng=${data.longitude}&radius=3000`
+      );
+      return res.data;
+    },
+    enabled:
+      typeof data?.latitude === "number" && typeof data?.longitude === "number"
+  });
+
+  // Fetch individual offers for the chart
+  const { data: offersData } = useQuery({
+    queryKey: ["property-offers", id],
+    queryFn: async () => {
+      try {
+        console.log("📊 Fetching offers for property:", id);
+        const res = await axios.get(`${endpoints.propertySales}/${id}/offers`);
+        console.log("✅ Offers response:", res.data);
+        const offers = res.data?.offers || [];
+        console.log("📊 Processed offers:", offers.length, offers);
+        return offers;
+      } catch (error) {
+        console.log("❌ No offers data available:", error);
+        return [];
+      }
+    },
+    enabled: !!id,
+    retry: false
+  });
+
+  const videoRef = useRef<Video>(null);
+
+  useEffect(() => {
+    if (showGalleryModal && galleryRef.current) {
+      galleryRef.current.scrollTo({
+        x: selectedImageIndex * width,
+        animated: false
+      });
+    }
+  }, [showGalleryModal, selectedImageIndex, width]);
+
+  // Handlers
+  const handleShare = useCallback(async () => {
+    try {
+      await Share.share({
+        message: `Check out this property: ${data?.title}\nMRU ${Number(
+          data?.listing_price
+        ).toLocaleString()}`,
+        title: data?.title
+      });
+    } catch (error) {
+      console.error(error);
+    }
+  }, [data]);
+
+  const handleVideoPress = useCallback(async () => {
+    if (videoRef.current) {
+      if (isVideoPlaying) {
+        await videoRef.current.pauseAsync();
+      } else {
+        await videoRef.current.playAsync();
+      }
+      setIsVideoPlaying(!isVideoPlaying);
+    }
+  }, [isVideoPlaying]);
+
+  const onPlaybackStatusUpdate = (status: AVPlaybackStatus) => {
+    if (status.isLoaded) {
+      setIsVideoPlaying(status.isPlaying);
+      setVideoPosition(status.positionMillis || 0);
+      setVideoDuration(status.durationMillis || 0);
+    }
+  };
+
+  // Auto-play video when it loads
+  const handleVideoLoad = useCallback(async (status: AVPlaybackStatus) => {
+    if (status.isLoaded && videoRef.current) {
+      try {
+        await videoRef.current.playAsync();
+        setVideoDuration(status.durationMillis || 0);
+        console.log("✅ Video auto-played successfully");
+      } catch (error) {
+        console.error("❌ Error auto-playing video:", error);
+      }
+    }
+  }, []);
+
+  // Handle fullscreen
+  const handleFullscreen = useCallback(() => {
+    if (videoRef.current) {
+      try {
+        videoRef.current.presentFullscreenPlayer();
+        console.log("✅ Fullscreen presented");
+      } catch (error) {
+        console.error("❌ Error presenting fullscreen:", error);
+      }
+    }
+  }, []);
+
+  // Toggle video controls visibility
+  const toggleControls = useCallback(() => {
+    setShowVideoControls(true);
+    // Auto-hide controls after 3 seconds
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+    }
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isVideoPlaying) {
+        setShowVideoControls(false);
+      }
+    }, 3000);
+  }, [isVideoPlaying]);
+
+  // Handle seek
+  const handleSeek = useCallback(
+    async (position: number) => {
+      if (videoRef.current && videoDuration > 0) {
+        const seekPosition = Math.max(0, Math.min(position, videoDuration));
+        try {
+          await videoRef.current.setPositionAsync(seekPosition);
+          setVideoPosition(seekPosition);
+        } catch (error) {
+          console.error("❌ Error seeking video:", error);
+        }
+      }
+    },
+    [videoDuration]
+  );
+
+  // Toggle mute
+  const handleToggleMute = useCallback(() => {
+    setIsVideoMuted(!isVideoMuted);
+    if (videoRef.current) {
+      videoRef.current.setIsMutedAsync(!isVideoMuted);
+    }
+  }, [isVideoMuted]);
+
+  // Format time
+  const formatTime = useCallback((millis: number) => {
+    const totalSeconds = Math.floor(millis / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }, []);
+
+  // Initialize controls timeout
+  useEffect(() => {
+    if (isVideoPlaying) {
+      const timer = setTimeout(() => {
+        setShowVideoControls(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [isVideoPlaying, showVideoControls]);
+
+  // Grabbing displayImages must be outside conditionals for stable hook order
+  const displayImages = useMemo(() => {
+    if (images.length > 0) return images;
+    return [data?.image].filter(Boolean) as string[];
+  }, [images, data]);
+
+  // Combined images for gallery modal (main images + classified photos)
+  const allGalleryImages = useMemo(() => {
+    const combined: string[] = [...displayImages];
+    if (Array.isArray(data?.classified_photos)) {
+      data.classified_photos.forEach((cp: any) => {
+        if (Array.isArray(cp?.photos)) {
+          combined.push(...cp.photos);
+        }
+      });
+    }
+    return combined;
+  }, [displayImages, data?.classified_photos]);
+
+  const hasCoordinates =
+    typeof data?.latitude === "number" && typeof data?.longitude === "number";
+
+  // Determine the property owner ID for conversations
+  const ownerID = data?.owner_id || data?.organization?.owner_id || null;
+
+  // Check if user can edit this property
+  const canEdit = useMemo(() => {
+    if (!user || !data) return false;
+    // Check if user is property owner
+    if (data.owner_id && data.owner_id === user.ID) return true;
+    // Check if user is organization owner
+    if (data.organization?.owner_id === user.ID) return true;
+    // Check if user is assigned agent
+    if (data.agent_id && data.agent?.user_id === user.ID) return true;
+    // Note: Organization member check would require additional API call
+    // For now, we'll rely on backend validation
+    return false;
+  }, [user, data]);
+
+  // Callbacks refactored for stable hook order & no closure over render values
+  const navigateWithPropertyPayload = useCallback(
+    <T extends keyof RootStackParamList>(
+      routeName: T,
+      extra?: Partial<RootStackParamList[T]>
+    ) => {
+      if (!id) {
+        setToast({
+          message: t("sale.missingProperty", "Missing property information."),
+          type: "error"
+        });
+        return;
+      }
+      navigation.navigate(routeName, {
+        propertyID: id,
+        propertyTitle: data?.title,
+        listingPrice: data?.listing_price,
+        coverImage: displayImages?.[0],
+        address: data?.address,
+        city: data?.city,
+        ownerID: ownerID,
+        ...(extra || {})
+      });
+    },
+    [id, navigation, data, displayImages, t, ownerID]
+  );
+  const handleRequestTourCTA = useCallback(() => {
+    if (!user?.accessToken) {
+      setToast({
+        message: t(
+          "tours.loginHelper",
+          "Log in to send requests and get alerts about confirmations."
+        ),
+        type: "info",
+        duration: 2600
+      });
+    }
+    navigateWithPropertyPayload("PropertySaleRequestTour");
+  }, [navigateWithPropertyPayload, user?.accessToken, t]);
+  const handleMakeOfferCTA = useCallback(() => {
+    if (!user?.accessToken) {
+      setToast({
+        message: t(
+          "offers.loginHelper",
+          "Log in to make offers and receive responses instantly."
+        ),
+        type: "info",
+        duration: 2600
+      });
+    }
+    navigateWithPropertyPayload("PropertySaleMakeOffer");
+  }, [navigateWithPropertyPayload, user?.accessToken, t]);
+
+  // Early return branches. Always outside hooks
+  if (isLoading) {
+    return (
+      <View style={styles.container}>
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.header}>
+            <Skeleton width={40} height={40} style={styles.headerBtn} />
+            <Skeleton width="60%" height={20} style={{ marginLeft: 20 }} />
+            <View style={styles.headerActions}>
+              <Skeleton width={40} height={40} style={styles.headerBtn} />
+              <Skeleton width={40} height={40} style={styles.headerBtn} />
+              <Skeleton width={40} height={40} style={styles.headerBtn} />
+            </View>
+          </View>
+        </SafeAreaView>
+        <Skeleton height={HERO_HEIGHT} />
+        <View style={styles.content}>
+          <View style={styles.section}>
+            <Skeleton width="80%" height={32} />
+            <Skeleton width="60%" height={20} style={{ marginTop: 8 }} />
+            <Skeleton width="70%" height={16} style={{ marginTop: 8 }} />
+          </View>
+          <View style={styles.statsRow}>
+            <Skeleton width={90} height={60} />
+            <Skeleton width={90} height={60} />
+            <Skeleton width={90} height={60} />
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.section}>
+            <Skeleton width="50%" height={24} />
+            <Skeleton height={16} style={{ marginTop: 16 }} />
+            <Skeleton height={16} style={{ marginTop: 4 }} />
+            <Skeleton height={16} style={{ marginTop: 4, width: "80%" }} />
+          </View>
+          <View style={styles.divider} />
+          <View style={styles.section}>
+            <Skeleton width="60%" height={24} />
+            <View style={{ flexDirection: "row", marginTop: 16, gap: 8 }}>
+              <Skeleton width={120} height={20} />
+              <Skeleton width={120} height={20} />
+            </View>
+          </View>
+        </View>
+      </View>
+    );
+  }
+  if (error || !data) {
+    console.log("❌ Property sale error:", error);
+    console.log("📊 Data received:", data);
+    return (
+      <View style={styles.container}>
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.header}>
+            <TouchableOpacity
+              style={styles.headerBtn}
+              onPress={() => navigation.goBack()}
+            >
+              <MaterialIcons name="arrow-back" size={24} color="#000" />
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+        <EmptyState
+          icon="🏠"
+          title="Property Not Found"
+          subtitle={
+            error
+              ? `Error: ${(error as any)?.message || String(error)}`
+              : "We couldn't load this property. Please try again later."
+          }
+        />
+      </View>
+    );
+  }
+
+  // Debug logging
+  console.log("🏠 Property Sale Details - Data:", {
+    id: data?.id,
+    title: data?.title,
+    price: data?.listing_price,
+    address: data?.address,
+    images: displayImages.length,
+    hasCoordinates,
+    dataKeys: data ? Object.keys(data) : "No data"
+  });
+
+  return (
+    <View style={styles.container}>
+      {/* Floating Header */}
+      <Animated.View
+        style={[styles.floatingHeader, { opacity: headerOpacity }]}
+      >
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.headerCompact}>
+            <Pressable
+              style={styles.headerBtnCompact}
+              onPress={() => navigation.goBack()}
+            >
+              <ArrowLeft size={22} color="#222" />
+            </Pressable>
+            <Text style={styles.headerTitleCompact} numberOfLines={1}>
+              {data?.title || t("sale.detailsTitle")}
+            </Text>
+            <View style={styles.headerActionsCompact}>
+              <Pressable style={styles.headerBtnCompact} onPress={handleShare}>
+                <ShareNetwork size={18} color="#222" />
+              </Pressable>
+              <Pressable
+                style={styles.headerBtnCompact}
+                onPress={() => {
+                  setIsFavorite(!isFavorite);
+                  trackFavorite();
+                }}
+              >
+                <Heart
+                  size={18}
+                  color={isFavorite ? theme["color-temporary-primary"] : "#222"}
+                  weight={isFavorite ? "fill" : "regular"}
+                />
+              </Pressable>
+              <Pressable
+                style={styles.headerBtnCompact}
+                onPress={() => setShowOptionsModal(true)}
+              >
+                <DotsThreeVertical size={18} color="#222" weight="bold" />
+              </Pressable>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Animated.View>
+      {/* Transparent Header Overlay */}
+      <View style={styles.transparentHeader}>
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.headerCompact}>
+            <Pressable
+              style={[styles.headerBtnCompact, styles.headerBtnTransparent]}
+              onPress={() => navigation.goBack()}
+            >
+              <ArrowLeft size={20} color="#FFF" />
+            </Pressable>
+            <View style={{ flex: 1 }} />
+            <Pressable
+              style={[styles.headerBtnCompact, styles.headerBtnTransparent]}
+              onPress={handleShare}
+            >
+              <ShareNetwork size={18} color="#FFF" />
+            </Pressable>
+              <Pressable
+                style={[styles.headerBtnCompact, styles.headerBtnTransparent]}
+                onPress={() => {
+                  setIsFavorite(!isFavorite);
+                  trackFavorite();
+                }}
+              >
+                <Heart
+                  size={18}
+                  color="#FFF"
+                  weight={isFavorite ? "fill" : "regular"}
+                />
+              </Pressable>
+          </View>
+        </SafeAreaView>
+      </View>
+      <Animated.ScrollView
+        style={{ flex: 1 }}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: true }
+        )}
+      >
+        {/* Hero Media Section with Tabs */}
+        <Animated.View style={{ transform: [{ scale: heroScale }] }}>
+          <View style={styles.heroMediaContainer}>
+            {/* Gallery Tab Content */}
+            {heroMediaTab === "gallery" && displayImages.length > 0 && (
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e) => {
+                  const i = Math.round(e.nativeEvent.contentOffset.x / width);
+                  setImgIndex(i);
+                }}
+              >
+                {displayImages.map((u: string, i: number) => (
+                  <TouchableOpacity
+                    key={`img-${i}`}
+                    onPress={() => {
+                      setSelectedImageIndex(i);
+                      setShowGalleryModal(true);
+                    }}
+                    activeOpacity={0.9}
+                  >
+                    <Image
+                      source={{ uri: u }}
+                      style={[styles.hero, { width }]}
+                    />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+
+            {/* Video Tab Content */}
+            {heroMediaTab === "video" &&
+              Array.isArray(data?.videos) &&
+              data.videos.length > 0 && (
+                <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={() => setShowVideoFullscreenModal(true)}
+                  style={styles.heroVideoContainer}
+                >
+                  <Video
+                    ref={videoRef}
+                    style={styles.heroVideo}
+                    source={{ uri: data.videos[0] }}
+                    useNativeControls={false}
+                    resizeMode={ResizeMode.COVER}
+                    shouldPlay={false}
+                    isMuted={true}
+                  />
+                  <View style={styles.heroVideoOverlay}>
+                    <View style={styles.heroVideoPlayButton}>
+                      <Play size={48} color="#FFF" weight="fill" />
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              )}
+
+            {/* Empty State */}
+            {heroMediaTab === "gallery" && displayImages.length === 0 && (
+              <View style={[styles.hero, styles.noImage]}>
+                <Text style={styles.noImageText}>🏠</Text>
+                <Text style={styles.noImageSubtext}>{t("sale.noImages")}</Text>
+              </View>
+            )}
+
+            {heroMediaTab === "video" &&
+              (!Array.isArray(data?.videos) || data.videos.length === 0) && (
+                <View style={[styles.hero, styles.noImage]}>
+                  <Text style={styles.noImageText}>🎥</Text>
+                  <Text style={styles.noImageSubtext}>
+                    {t("sale.noVideo", "No video available")}
+                  </Text>
+                </View>
+              )}
+
+            {/* Tabs - Bottom Center */}
+            {(displayImages.length > 0 ||
+              (Array.isArray(data?.videos) && data.videos.length > 0)) && (
+              <View style={styles.heroMediaTabs}>
+                <Pressable
+                  style={[
+                    styles.heroMediaTab,
+                    heroMediaTab === "gallery" && styles.heroMediaTabActive
+                  ]}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setHeroMediaTab("gallery");
+                  }}
+                >
+                  <Camera
+                    size={18}
+                    color={
+                      heroMediaTab === "gallery"
+                        ? "#FFF"
+                        : "rgba(255,255,255,0.7)"
+                    }
+                    weight={heroMediaTab === "gallery" ? "bold" : "regular"}
+                  />
+                  <Text
+                    style={[
+                      styles.heroMediaTabText,
+                      heroMediaTab === "gallery" &&
+                        styles.heroMediaTabTextActive
+                    ]}
+                  >
+                    {t("common.gallery", "Gallery")}
+                  </Text>
+                </Pressable>
+                {Array.isArray(data?.videos) && data.videos.length > 0 && (
+                  <Pressable
+                    style={[
+                      styles.heroMediaTab,
+                      heroMediaTab === "video" && styles.heroMediaTabActive
+                    ]}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setHeroMediaTab("video");
+                    }}
+                  >
+                    <Play
+                      size={18}
+                      color={
+                        heroMediaTab === "video"
+                          ? "#FFF"
+                          : "rgba(255,255,255,0.7)"
+                      }
+                      weight={heroMediaTab === "video" ? "fill" : "regular"}
+                    />
+                    <Text
+                      style={[
+                        styles.heroMediaTabText,
+                        heroMediaTab === "video" &&
+                          styles.heroMediaTabTextActive
+                      ]}
+                    >
+                      {t("common.video", "Video")}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+
+            {/* Image Counter - Only show on gallery tab */}
+            {heroMediaTab === "gallery" && displayImages.length > 1 && (
+              <View style={styles.imageCounter}>
+                <Text style={styles.imageCounterText}>
+                  {imgIndex + 1} / {displayImages.length}
+                </Text>
+              </View>
+            )}
+          </View>
+        </Animated.View>
+        {/* Classified Photos by Room Type */}
+        {Array.isArray(data?.classified_photos) &&
+          data.classified_photos.length > 0 && (
+            <View style={styles.classifiedPhotosSection}>
+              <Text style={styles.classifiedPhotosTitle}>
+                {t("sale.classifiedPhotos", "Photos by Room")}
+              </Text>
+              <View style={styles.classifiedPhotosGrid}>
+                {data.classified_photos.map((cp: any, idx: number) => {
+                  const roomType = cp.room_type || "";
+                  const photos = Array.isArray(cp.photos) ? cp.photos : [];
+                  if (photos.length === 0) return null;
+
+                  const roomTypeLabels: Record<string, string> = {
+                    kitchen: t("sale.roomTypes.kitchen", "Kitchen"),
+                    living_room: t("sale.roomTypes.livingRoom", "Living Room"),
+                    hall: t("sale.roomTypes.hall", "Hall"),
+                    bedroom: t("sale.roomTypes.bedroom", "Bedroom"),
+                    bathroom: t("sale.roomTypes.bathroom", "Bathroom"),
+                    dining_room: t("sale.roomTypes.diningRoom", "Dining Room"),
+                    balcony: t("sale.roomTypes.balcony", "Balcony"),
+                    study: t("sale.roomTypes.study", "Study/Office"),
+                    garage: t("sale.roomTypes.garage", "Garage"),
+                    garden: t("sale.roomTypes.garden", "Garden"),
+                    other: t("sale.roomTypes.other", "Other")
+                  };
+
+                  const roomTypeIcons: Record<string, any> = {
+                    kitchen: CookingPot,
+                    living_room: Couch,
+                    hall: Door,
+                    bedroom: Bed,
+                    bathroom: Toilet,
+                    dining_room: ForkKnife,
+                    balcony: Rectangle,
+                    study: BookOpen,
+                    garage: Car,
+                    garden: Tree,
+                    other: Camera
+                  };
+
+                  const IconComponent = roomTypeIcons[roomType] || Camera;
+
+                  // Calculate starting index for this room in combined gallery
+                  let combinedStartIndex = displayImages.length;
+                  for (let i = 0; i < idx; i++) {
+                    const prevRoom = data.classified_photos[i];
+                    if (Array.isArray(prevRoom?.photos)) {
+                      combinedStartIndex += prevRoom.photos.length;
+                    }
+                  }
+
+                  return (
+                    <View
+                      key={`classified-${idx}`}
+                      style={styles.classifiedRoomCard}
+                    >
+                      <View style={styles.classifiedRoomCardHeader}>
+                        <View style={styles.classifiedRoomIconWrapper}>
+                          <IconComponent
+                            size={20}
+                            color="#006AFF"
+                            weight="regular"
+                          />
+                        </View>
+                        <View style={styles.classifiedRoomInfo}>
+                          <Text
+                            style={styles.classifiedRoomCardLabel}
+                            numberOfLines={1}
+                          >
+                            {roomTypeLabels[roomType] || roomType}
+                          </Text>
+                          <Text style={styles.classifiedRoomCountText}>
+                            {photos.length}{" "}
+                            {photos.length === 1 ? "photo" : "photos"}
+                          </Text>
+                        </View>
+                        <View style={styles.classifiedRoomCardBadge}>
+                          <Text style={styles.classifiedRoomCardBadgeText}>
+                            {photos.length}
+                          </Text>
+                        </View>
+                      </View>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={
+                          styles.classifiedPhotosScrollContent
+                        }
+                      >
+                        {photos.map((photoUri: string, photoIdx: number) => {
+                          const combinedIndex = combinedStartIndex + photoIdx;
+                          return (
+                            <TouchableOpacity
+                              key={`${roomType}-${photoIdx}`}
+                              onPress={() => {
+                                setSelectedImageIndex(combinedIndex);
+                                setShowGalleryModal(true);
+                              }}
+                              style={styles.classifiedPhotoThumb}
+                              activeOpacity={0.8}
+                            >
+                              <Image
+                                source={{ uri: photoUri }}
+                                style={styles.classifiedPhotoThumbImage}
+                              />
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+        {/* Main Content */}
+        <View style={styles.contentCompact}>
+          {/* Price & Title - Compact */}
+          <View style={styles.sectionCompact}>
+            {typeof data?.listing_price === "number" && (
+              <Text style={styles.priceTagCompact}>
+                MRU {Number(data.listing_price).toLocaleString()}
+              </Text>
+            )}
+            <Text style={styles.propertyTitleCompact}>
+              {data?.title || t("sale.untitled")}
+            </Text>
+            <View style={styles.addressRow}>
+              <MapPin size={14} color="#717171" />
+              <Text style={styles.addressCompact}>
+                {data?.address ||
+                  [data?.city, data?.state, data?.country]
+                    .filter(Boolean)
+                    .join(", ") ||
+                  t("sale.addressUnavailable")}
+              </Text>
+            </View>
+          </View>
+          {/* Key Stats - Compact */}
+          <View style={styles.statsRowCompact}>
+            {typeof data?.bedrooms === "number" && (
+              <View style={styles.statCardCompact}>
+                <Bed size={20} color="#222" weight="regular" />
+                <Text style={styles.statValueCompact}>{data.bedrooms}</Text>
+                <Text style={styles.statLabelCompact}>
+                  {t("sale.bedrooms")}
+                </Text>
+              </View>
+            )}
+            {typeof data?.bathrooms === "number" && (
+              <View style={styles.statCardCompact}>
+                <Bathtub size={20} color="#222" weight="regular" />
+                <Text style={styles.statValueCompact}>{data.bathrooms}</Text>
+                <Text style={styles.statLabelCompact}>
+                  {t("sale.bathrooms")}
+                </Text>
+              </View>
+            )}
+            {typeof data?.square_footage === "number" && (
+              <View style={styles.statCardCompact}>
+                <Ruler size={20} color="#222" weight="regular" />
+                <Text style={styles.statValueCompact}>
+                  {data.square_footage}
+                </Text>
+                <Text style={styles.statLabelCompact}>{t("sale.sqm")}</Text>
+              </View>
+            )}
+            {data?.year_built && (
+              <View style={styles.statCardCompact}>
+                <Calendar size={20} color="#222" weight="regular" />
+                <Text style={styles.statValueCompact}>{data.year_built}</Text>
+                <Text style={styles.statLabelCompact}>{t("sale.built")}</Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.divider} />
+          {/* Description with View More/Less */}
+          {data?.description ? (
+            <View style={styles.sectionCompact}>
+              <Text style={styles.sectionTitleSmall}>
+                {t("sale.aboutHome")}
+              </Text>
+              <Text
+                style={styles.descriptionSmall}
+                numberOfLines={showFullDescription ? undefined : 3}
+              >
+                {data.description}
+              </Text>
+              {data.description.length > 120 && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setShowFullDescription(!showFullDescription);
+                  }}
+                  style={styles.viewMoreBtn}
+                >
+                  <Text style={styles.viewMoreText}>
+                    {showFullDescription
+                      ? t("common.viewLess", "View less")
+                      : t("common.viewMore", "View more")}
+                  </Text>
+                  {showFullDescription ? (
+                    <CaretUp
+                      size={14}
+                      color={theme["color-temporary-primary"]}
+                      weight="bold"
+                    />
+                  ) : (
+                    <CaretDown
+                      size={14}
+                      color={theme["color-temporary-primary"]}
+                      weight="bold"
+                    />
+                  )}
+                </Pressable>
+              )}
+            </View>
+          ) : null}
+          <View style={styles.divider} />
+          {/* Features with View More/Less */}
+          {(Array.isArray(data?.features) && data.features.length > 0) ||
+          (Array.isArray(data?.amenities) && data.amenities.length > 0) ? (
+            <View style={styles.sectionCompact}>
+              <Text style={styles.sectionTitleSmall}>
+                {t("sale.featuresAmenities")}
+              </Text>
+              <View style={styles.featureGridCompact}>
+                {[...(data?.features || []), ...(data?.amenities || [])]
+                  .slice(0, showFullFeatures ? undefined : 6)
+                  .map((f: string, idx: number) => (
+                    <View key={`feat-${idx}`} style={styles.featureItemCompact}>
+                      <Check
+                        size={16}
+                        color={theme["color-temporary-primary"]}
+                        weight="bold"
+                      />
+                      <Text style={styles.featureTextSmall}>{f}</Text>
+                    </View>
+                  ))}
+              </View>
+              {[...(data?.features || []), ...(data?.amenities || [])].length >
+                6 && (
+                <Pressable
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setShowFullFeatures(!showFullFeatures);
+                  }}
+                  style={styles.viewMoreBtn}
+                >
+                  <Text style={styles.viewMoreText}>
+                    {showFullFeatures
+                      ? t("common.viewLess", "View less")
+                      : t(
+                          "common.viewMore",
+                          `View all ${
+                            [
+                              ...(data?.features || []),
+                              ...(data?.amenities || [])
+                            ].length
+                          } features`
+                        )}
+                  </Text>
+                  {showFullFeatures ? (
+                    <CaretUp
+                      size={14}
+                      color={theme["color-temporary-primary"]}
+                      weight="bold"
+                    />
+                  ) : (
+                    <CaretDown
+                      size={14}
+                      color={theme["color-temporary-primary"]}
+                      weight="bold"
+                    />
+                  )}
+                </Pressable>
+              )}
+            </View>
+          ) : null}
+          <View style={styles.divider} />
+          {/* Create Your Own Group Section */}
+          {/* <View style={styles.groupSection}>
+            <View style={styles.groupHeader}>
+              <View style={styles.groupTextContainer}>
+                <Text style={styles.groupTitle}>
+                  {t("sale.shareWithGroup")}
+                </Text>
+                <Text style={styles.groupSubtitle}>
+                  {t("sale.createGroupToShareListing")}
+                </Text>
+              </View>
+              <Image
+                source={require("../assets/Group.jpg")}
+                style={styles.groupImage}
+              />
+            </View>
+            <TouchableOpacity
+              style={styles.groupButton}
+              onPress={() =>
+                navigation.navigate("GroupCreate", { experienceId: data?.id })
+              }
+            >
+              <Text style={styles.groupButtonText}>
+                {t("sale.createGroup")}
+              </Text>
+            </TouchableOpacity>
+          </View> */}
+          <View style={styles.divider} />
+          {/* Floor Plans - Clean Airbnb Style */}
+          {Array.isArray((data as any)?.floor_plans) &&
+            (data as any).floor_plans.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>{t("sale.floorPlans")}</Text>
+                {(data as any).floor_plans.map((f: any, idx: number) => (
+                  <TouchableOpacity
+                    key={`floor-${idx}`}
+                    style={styles.floorPlanRow}
+                    onPress={() => {
+                      setSelectedFloorPlan(f);
+                      setShowFloorPlanModal(true);
+                    }}
+                    activeOpacity={0.6}
+                  >
+                    {/* Thumbnail */}
+                    {Array.isArray(f?.images) &&
+                    f.images.filter(Boolean).length > 0 ? (
+                      <Image
+                        source={{ uri: f.images[0] }}
+                        style={styles.floorPlanThumb}
+                      />
+                    ) : (
+                      <View
+                        style={[
+                          styles.floorPlanThumb,
+                          {
+                            backgroundColor: "#F3F4F6",
+                            justifyContent: "center",
+                            alignItems: "center"
+                          }
+                        ]}
+                      >
+                        <MaterialIcons
+                          name="apartment"
+                          size={24}
+                          color="#9CA3AF"
+                        />
+                      </View>
+                    )}
+                    {/* Info */}
+                    <View style={styles.floorPlanInfo}>
+                      <Text style={styles.floorPlanName}>
+                        {f?.name || `Floor ${idx + 1}`}
+                      </Text>
+                      <Text style={styles.floorPlanSpecs}>
+                        {[
+                          typeof f?.bedrooms === "number"
+                            ? `${f.bedrooms} bed`
+                            : null,
+                          typeof f?.bathrooms === "number"
+                            ? `${f.bathrooms} bath`
+                            : null,
+                          typeof f?.area_sqm === "number" && f.area_sqm > 0
+                            ? `${f.area_sqm} m²`
+                            : null
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </Text>
+                    </View>
+                    {/* Arrow */}
+                    <MaterialIcons
+                      name="chevron-right"
+                      size={24}
+                      color="#9CA3AF"
+                    />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          {/* Neighborhood */}
+          {(data as any)?.neighborhood ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.neighborhood")}</Text>
+              <View style={styles.featureGrid}>
+                {(data as any)?.neighborhood?.noise_level ? (
+                  <View style={styles.featureItem}>
+                    <MaterialIcons
+                      name="check"
+                      size={20}
+                      color={theme["color-temporary-primary"]}
+                    />
+                    <Text style={styles.featureText}>
+                      {t("sale.noise")}:{" "}
+                      {(data as any).neighborhood.noise_level}
+                    </Text>
+                  </View>
+                ) : null}
+                {(data as any)?.neighborhood?.safety_level ? (
+                  <View style={styles.featureItem}>
+                    <MaterialIcons
+                      name="check"
+                      size={20}
+                      color={theme["color-temporary-primary"]}
+                    />
+                    <Text style={styles.featureText}>
+                      {t("sale.safety")}:{" "}
+                      {(data as any).neighborhood.safety_level}
+                    </Text>
+                  </View>
+                ) : null}
+                {(data as any)?.neighborhood?.traffic_level ? (
+                  <View style={styles.featureItem}>
+                    <MaterialIcons
+                      name="check"
+                      size={20}
+                      color={theme["color-temporary-primary"]}
+                    />
+                    <Text style={styles.featureText}>
+                      {t("sale.traffic")}:{" "}
+                      {(data as any).neighborhood.traffic_level}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+              {!!(data as any)?.neighborhood?.notes && (
+                <Text style={[styles.description, { marginTop: 8 }]}>
+                  {(data as any).neighborhood.notes}
+                </Text>
+              )}
+            </View>
+          ) : null}
+          <View style={styles.divider} />
+          {/* Offer Insights (public) */}
+          <OfferInsights propertyId={id} />
+          {/* Offer Price Chart */}
+          {data?.id && (
+            <View style={styles.sectionCompact}>
+              <OfferPriceChart propertyId={data.id} offers={offersData || []} />
+            </View>
+          )}
+          {/* Video Walkthrough - YouTube-like Player */}
+          {Array.isArray(data?.videos) && data.videos.length > 0 ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.videoTour")}</Text>
+              <View style={styles.videoContainer}>
+                <TouchableOpacity
+                  activeOpacity={1}
+                  onPress={toggleControls}
+                  style={styles.videoTouchArea}
+                >
+                  <Video
+                    ref={videoRef}
+                    style={styles.video}
+                    source={{ uri: data.videos[0] }}
+                    useNativeControls={false}
+                    resizeMode={ResizeMode.COVER}
+                    shouldPlay={true}
+                    isLooping={true}
+                    isMuted={isVideoMuted}
+                    volume={videoVolume}
+                    progressUpdateIntervalMillis={250}
+                    onLoad={(status) => {
+                      handleVideoLoad(status);
+                      // Also ensure it plays on load
+                      if (status.isLoaded && videoRef.current) {
+                        videoRef.current.playAsync().catch((err) => {
+                          console.error("❌ Error playing video on load:", err);
+                        });
+                      }
+                    }}
+                    onPlaybackStatusUpdate={onPlaybackStatusUpdate}
+                    onError={(error) => {
+                      console.error("❌ Video error:", error);
+                    }}
+                  />
+
+                  {/* YouTube-like Controls Overlay */}
+                  {showVideoControls && (
+                    <View style={styles.videoControlsOverlay}>
+                      {/* Top Controls Bar */}
+                      <View style={styles.videoTopControls}>
+                        <TouchableOpacity
+                          style={styles.videoControlButton}
+                          onPress={handleFullscreen}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <MaterialIcons
+                            name="fullscreen"
+                            size={24}
+                            color="#FFFFFF"
+                          />
+                        </TouchableOpacity>
+                      </View>
+
+                      {/* Center Play/Pause Button */}
+                      <TouchableOpacity
+                        style={styles.videoCenterPlayButton}
+                        onPress={handleVideoPress}
+                        activeOpacity={0.8}
+                        hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+                      >
+                        <View style={styles.videoPlayCircle}>
+                          {isVideoPlaying ? (
+                            <Pause size={40} color="#FFFFFF" weight="fill" />
+                          ) : (
+                            <Play size={40} color="#FFFFFF" weight="fill" />
+                          )}
+                        </View>
+                      </TouchableOpacity>
+
+                      {/* Bottom Controls Bar */}
+                      <View style={styles.videoBottomControls}>
+                        {/* Play/Pause Button */}
+                        <TouchableOpacity
+                          style={styles.videoControlButton}
+                          onPress={handleVideoPress}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          {isVideoPlaying ? (
+                            <Pause size={24} color="#FFFFFF" weight="fill" />
+                          ) : (
+                            <Play size={24} color="#FFFFFF" weight="fill" />
+                          )}
+                        </TouchableOpacity>
+
+                        {/* Time Display */}
+                        <Text style={styles.videoTimeText}>
+                          {formatTime(videoPosition)} /{" "}
+                          {formatTime(videoDuration)}
+                        </Text>
+
+                        {/* Progress Bar - Interactive Seekbar */}
+                        <View style={styles.videoProgressContainer}>
+                          <TouchableOpacity
+                            style={styles.videoProgressBar}
+                            activeOpacity={1}
+                            onPress={(e) => {
+                              if (videoDuration > 0) {
+                                const { locationX } = e.nativeEvent;
+                                const containerWidth =
+                                  Dimensions.get("window").width - 200; // Approximate available width
+                                const progress = Math.max(
+                                  0,
+                                  Math.min(locationX / containerWidth, 1)
+                                );
+                                const newPosition = progress * videoDuration;
+                                handleSeek(newPosition);
+                                toggleControls(); // Show controls after seeking
+                              }
+                            }}
+                          >
+                            <View
+                              style={[
+                                styles.videoProgressFill,
+                                {
+                                  width:
+                                    videoDuration > 0
+                                      ? `${
+                                          (videoPosition / videoDuration) * 100
+                                        }%`
+                                      : "0%"
+                                }
+                              ]}
+                            />
+                            <View
+                              style={[
+                                styles.videoProgressThumb,
+                                {
+                                  left:
+                                    videoDuration > 0
+                                      ? `${
+                                          (videoPosition / videoDuration) * 100
+                                        }%`
+                                      : "0%"
+                                }
+                              ]}
+                            />
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Mute Button */}
+                        <TouchableOpacity
+                          style={styles.videoControlButton}
+                          onPress={handleToggleMute}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          {isVideoMuted ? (
+                            <MaterialIcons
+                              name="volume-off"
+                              size={24}
+                              color="#FFFFFF"
+                            />
+                          ) : (
+                            <MaterialIcons
+                              name="volume-up"
+                              size={24}
+                              color="#FFFFFF"
+                            />
+                          )}
+                        </TouchableOpacity>
+
+                        {/* Fullscreen Button */}
+                        <TouchableOpacity
+                          style={styles.videoControlButton}
+                          onPress={handleFullscreen}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <MaterialIcons
+                            name="fullscreen"
+                            size={24}
+                            color="#FFFFFF"
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
+          {data?.videos?.length && <View style={styles.divider} />}
+          {/* Location & Map */}
+          {hasCoordinates ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.location")}</Text>
+              <MapView
+                style={styles.map}
+                mapType="standard"
+                provider="google"
+                initialRegion={{
+                  latitude: data.latitude,
+                  longitude: data.longitude,
+                  latitudeDelta: 0.012,
+                  longitudeDelta: 0.012
+                }}
+              >
+                {/* Property marker (house) - Distinctive with unique styling */}
+                <Marker
+                  coordinate={{
+                    latitude: data.latitude,
+                    longitude: data.longitude
+                  }}
+                >
+                  <View style={[styles.markerBubble, styles.markerHouse]}>
+                    <House
+                      size={24}
+                      color={theme["color-temporary-primary"]}
+                      weight="fill"
+                    />
+                  </View>
+                </Marker>
+                {/* Schools */}
+                {nearby &&
+                  Array.isArray((nearby as any).schools) &&
+                  (nearby as any).schools.map((p: any, idx: number) => {
+                    const lat = p?.latitude ?? p?.lat;
+                    const lng = p?.longitude ?? p?.lng;
+                    if (typeof lat !== "number" || typeof lng !== "number")
+                      return null;
+                    return (
+                      <Marker
+                        key={`school-${idx}`}
+                        coordinate={{ latitude: lat, longitude: lng }}
+                      >
+                        <View
+                          style={[styles.markerBubble, styles.markerSchool]}
+                        >
+                          <GraduationCap
+                            size={20}
+                            color="#0066CC"
+                            weight="fill"
+                          />
+                        </View>
+                      </Marker>
+                    );
+                  })}
+                {/* Hospitals */}
+                {nearby &&
+                  Array.isArray((nearby as any).hospitals) &&
+                  (nearby as any).hospitals.map((p: any, idx: number) => {
+                    const lat = p?.latitude ?? p?.lat;
+                    const lng = p?.longitude ?? p?.lng;
+                    if (typeof lat !== "number" || typeof lng !== "number")
+                      return null;
+                    return (
+                      <Marker
+                        key={`hospital-${idx}`}
+                        coordinate={{ latitude: lat, longitude: lng }}
+                      >
+                        <View
+                          style={[styles.markerBubble, styles.markerHospital]}
+                        >
+                          <FirstAid size={20} color="#DC2626" weight="fill" />
+                        </View>
+                      </Marker>
+                    );
+                  })}
+                {/* Restaurants */}
+                {nearby &&
+                  Array.isArray((nearby as any).restaurants) &&
+                  (nearby as any).restaurants.map((p: any, idx: number) => {
+                    const lat = p?.latitude ?? p?.lat;
+                    const lng = p?.longitude ?? p?.lng;
+                    if (typeof lat !== "number" || typeof lng !== "number")
+                      return null;
+                    return (
+                      <Marker
+                        key={`restaurant-${idx}`}
+                        coordinate={{ latitude: lat, longitude: lng }}
+                      >
+                        <View
+                          style={[styles.markerBubble, styles.markerRestaurant]}
+                        >
+                          <ForkKnife size={20} color="#F59E0B" weight="fill" />
+                        </View>
+                      </Marker>
+                    );
+                  })}
+              </MapView>
+              <Text style={styles.mapAddress}>
+                {data?.address ||
+                  [data?.city, data?.state, data?.country]
+                    .filter(Boolean)
+                    .join(", ")}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.location")}</Text>
+              <EmptyState
+                icon="📍"
+                title={t("sale.locationUnavailableTitle")}
+                subtitle={t("sale.locationUnavailableSubtitle")}
+              />
+            </View>
+          )}
+          <View style={styles.divider} />
+          {/* What's Nearby */}
+          {hasCoordinates && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.whatsNearby")}</Text>
+              {nearbyLoading ? (
+                <View style={{ marginTop: 16 }}>
+                  <Skeleton height={40} style={{ marginBottom: 12 }} />
+                  <Skeleton height={70} style={{ marginBottom: 8 }} />
+                  <Skeleton height={70} style={{ marginBottom: 8 }} />
+                  <Skeleton height={70} />
+                </View>
+              ) : nearby ? (
+                <>
+                  <View style={styles.tabBar}>
+                    <TouchableOpacity
+                      style={[
+                        styles.tabButton,
+                        activeTab === "schools" && styles.tabButtonActive
+                      ]}
+                      onPress={() => setActiveTab("schools")}
+                    >
+                      <Text
+                        style={[
+                          styles.tabButtonText,
+                          activeTab === "schools" && styles.tabButtonTextActive
+                        ]}
+                      >
+                        {t("sale.schools")}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.tabButton,
+                        activeTab === "hospitals" && styles.tabButtonActive
+                      ]}
+                      onPress={() => setActiveTab("hospitals")}
+                    >
+                      <Text
+                        style={[
+                          styles.tabButtonText,
+                          activeTab === "hospitals" &&
+                            styles.tabButtonTextActive
+                        ]}
+                      >
+                        {t("sale.hospitals")}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.tabButton,
+                        activeTab === "restaurants" && styles.tabButtonActive
+                      ]}
+                      onPress={() => setActiveTab("restaurants")}
+                    >
+                      <Text
+                        style={[
+                          styles.tabButtonText,
+                          activeTab === "restaurants" &&
+                            styles.tabButtonTextActive
+                        ]}
+                      >
+                        {t("sale.dining")}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.poiContainer}>
+                    {activeTab === "schools" && (
+                      <>
+                        {(nearby.schools || []).length > 0 ? (
+                          nearby.schools.map((p: any, idx: number) => (
+                            <View key={`school-${idx}`} style={styles.poiCard}>
+                              {p.image ? (
+                                <Image
+                                  source={{ uri: p.image }}
+                                  style={styles.poiImage}
+                                />
+                              ) : (
+                                <View
+                                  style={[
+                                    styles.poiImage,
+                                    styles.poiImageEmpty
+                                  ]}
+                                >
+                                  <GraduationCap
+                                    size={28}
+                                    color="#0066CC"
+                                    weight="fill"
+                                  />
+                                </View>
+                              )}
+                              <View style={styles.poiContent}>
+                                <View style={styles.poiNameRow}>
+                                  <GraduationCap
+                                    size={16}
+                                    color="#0066CC"
+                                    weight="regular"
+                                    style={styles.poiIcon}
+                                  />
+                                  <Text
+                                    style={styles.poiName}
+                                    numberOfLines={2}
+                                  >
+                                    {p.name || "School"}
+                                  </Text>
+                                </View>
+                                <Text style={styles.poiDistance}>
+                                  {p.distance_m}m away
+                                </Text>
+                              </View>
+                            </View>
+                          ))
+                        ) : (
+                          <EmptyState
+                            icon="🎓"
+                            title={t("sale.noSchoolsTitle")}
+                            subtitle={t("sale.noSchoolsSubtitle")}
+                          />
+                        )}
+                      </>
+                    )}
+
+                    {activeTab === "hospitals" && (
+                      <>
+                        {(nearby.hospitals || []).length > 0 ? (
+                          nearby.hospitals.map((p: any, idx: number) => (
+                            <View
+                              key={`hospital-${idx}`}
+                              style={styles.poiCard}
+                            >
+                              <View
+                                style={[styles.poiImage, styles.poiImageEmpty]}
+                              >
+                                <FirstAid
+                                  size={28}
+                                  color="#DC2626"
+                                  weight="fill"
+                                />
+                              </View>
+                              <View style={styles.poiContent}>
+                                <View style={styles.poiNameRow}>
+                                  <FirstAid
+                                    size={16}
+                                    color="#DC2626"
+                                    weight="regular"
+                                    style={styles.poiIcon}
+                                  />
+                                  <Text
+                                    style={styles.poiName}
+                                    numberOfLines={2}
+                                  >
+                                    {p.name || "Hospital"}
+                                  </Text>
+                                </View>
+                                <Text style={styles.poiDistance}>
+                                  {p.distance_m}m away
+                                </Text>
+                              </View>
+                            </View>
+                          ))
+                        ) : (
+                          <EmptyState
+                            icon="🏥"
+                            title={t("sale.noHospitalsTitle")}
+                            subtitle={t("sale.noHospitalsSubtitle")}
+                          />
+                        )}
+                      </>
+                    )}
+
+                    {activeTab === "restaurants" && (
+                      <>
+                        {(nearby.restaurants || []).length > 0 ? (
+                          nearby.restaurants.map((p: any, idx: number) => (
+                            <View
+                              key={`restaurant-${idx}`}
+                              style={styles.poiCard}
+                            >
+                              {p.image ? (
+                                <Image
+                                  source={{ uri: p.image }}
+                                  style={styles.poiImage}
+                                />
+                              ) : (
+                                <View
+                                  style={[
+                                    styles.poiImage,
+                                    styles.poiImageEmpty
+                                  ]}
+                                >
+                                  <ForkKnife
+                                    size={28}
+                                    color="#F59E0B"
+                                    weight="fill"
+                                  />
+                                </View>
+                              )}
+                              <View style={styles.poiContent}>
+                                <View style={styles.poiNameRow}>
+                                  <ForkKnife
+                                    size={16}
+                                    color="#F59E0B"
+                                    weight="regular"
+                                    style={styles.poiIcon}
+                                  />
+                                  <Text
+                                    style={styles.poiName}
+                                    numberOfLines={2}
+                                  >
+                                    {p.name || "Restaurant"}
+                                  </Text>
+                                </View>
+                                <Text style={styles.poiDistance}>
+                                  {p.distance_m}m away
+                                </Text>
+                              </View>
+                            </View>
+                          ))
+                        ) : (
+                          <EmptyState
+                            icon="🍽️"
+                            title={t("sale.noRestaurantsTitle")}
+                            subtitle={t("sale.noRestaurantsSubtitle")}
+                          />
+                        )}
+                      </>
+                    )}
+                  </View>
+                </>
+              ) : (
+                <EmptyState
+                  icon="🔍"
+                  title={t("sale.noNearbyTitle")}
+                  subtitle={t("sale.noNearbySubtitle")}
+                />
+              )}
+            </View>
+          )}
+          <View style={styles.divider} />
+          {/* Listed By - Organization or Host */}
+          {data?.organization ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.listedBy")}</Text>
+              <View style={styles.agentCard}>
+                {data.organization.banner_image ? (
+                  <Image
+                    source={{ uri: data.organization.banner_image }}
+                    style={styles.agentAvatar}
+                  />
+                ) : (
+                  <View style={[styles.agentAvatar, styles.agentAvatarEmpty]}>
+                    <Text style={styles.agentAvatarText}>
+                      {data.organization.name?.charAt(0) || "?"}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.agentInfo}>
+                  <Text style={styles.agentName}>
+                    {data.organization.name || "Real Estate Agent"}
+                  </Text>
+                  {(data.organization.phone || data.organization.email) && (
+                    <Text style={styles.agentContact} numberOfLines={1}>
+                      {data.organization.phone || ""}
+                      {data.organization.phone && data.organization.email
+                        ? " • "
+                        : ""}
+                      {data.organization.email || ""}
+                    </Text>
+                  )}
+                  {data.organization.website && (
+                    <Text style={styles.agentWebsite} numberOfLines={1}>
+                      {data.organization.website}
+                    </Text>
+                  )}
+                </View>
+              </View>
+              <View style={styles.agentActions}>
+                {data.organization.phone && (
+                  <TouchableOpacity
+                    style={styles.agentActionBtn}
+                    onPress={() =>
+                      Linking.openURL(`tel:${data.organization.phone}`)
+                    }
+                  >
+                    <MaterialIcons name="phone" size={24} color="#222" />
+                    <Text style={styles.agentActionText}>{t("sale.call")}</Text>
+                  </TouchableOpacity>
+                )}
+                {data.organization.email && (
+                  <TouchableOpacity
+                    style={styles.agentActionBtn}
+                    onPress={() =>
+                      Linking.openURL(`mailto:${data.organization.email}`)
+                    }
+                  >
+                    <MaterialIcons name="email" size={24} color="#222" />
+                    <Text style={styles.agentActionText}>
+                      {t("sale.email")}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  style={styles.agentActionBtn}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    navigation.navigate("ContactAgentModal", {
+                      phone: data?.organization?.phone,
+                      email: data?.organization?.email,
+                      ownerID: ownerID || undefined,
+                      organizationName: data?.organization?.name,
+                      organizationImage: data?.organization?.banner_image,
+                      organizationWebsite: data?.organization?.website,
+                      recipientName: data?.organization?.name || "Agent"
+                    });
+                  }}
+                >
+                  <MaterialIcons name="message" size={24} color="#222" />
+                  <Text style={styles.agentActionText}>
+                    {t("sale.message")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : data?.owner ? (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.listedBy")}</Text>
+              <View style={styles.hostCard}>
+                {data.owner.avatarURL ? (
+                  <Image
+                    source={{ uri: data.owner.avatarURL }}
+                    style={styles.hostAvatar}
+                  />
+                ) : (
+                  <View style={[styles.hostAvatar, styles.hostAvatarEmpty]}>
+                    <Text style={styles.hostAvatarText}>
+                      {data.owner.firstName?.charAt(0)?.toUpperCase() ||
+                        data.owner.lastName?.charAt(0)?.toUpperCase() ||
+                        "H"}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.hostInfo}>
+                  <Text style={styles.hostName}>
+                    {data.owner.firstName && data.owner.lastName
+                      ? `${data.owner.firstName} ${data.owner.lastName}`.trim()
+                      : data.owner.firstName ||
+                        data.owner.lastName ||
+                        t("sale.host", "Host")}
+                  </Text>
+                  {data.owner.phoneNumber && (
+                    <Text style={styles.hostContact} numberOfLines={1}>
+                      {data.owner.phoneNumber}
+                    </Text>
+                  )}
+                  {data.owner.email && (
+                    <Text style={styles.hostEmail} numberOfLines={1}>
+                      {data.owner.email}
+                    </Text>
+                  )}
+                  {data.owner.bio && (
+                    <Text style={styles.hostBio} numberOfLines={2}>
+                      {data.owner.bio}
+                    </Text>
+                  )}
+                </View>
+              </View>
+              <View style={styles.agentActions}>
+                {data.owner.phoneNumber && (
+                  <TouchableOpacity
+                    style={styles.agentActionBtn}
+                    onPress={() =>
+                      Linking.openURL(`tel:${data.owner.phoneNumber}`)
+                    }
+                  >
+                    <MaterialIcons name="phone" size={24} color="#222" />
+                    <Text style={styles.agentActionText}>{t("sale.call")}</Text>
+                  </TouchableOpacity>
+                )}
+                {data.owner.email && (
+                  <TouchableOpacity
+                    style={styles.agentActionBtn}
+                    onPress={() =>
+                      Linking.openURL(`mailto:${data.owner.email}`)
+                    }
+                  >
+                    <MaterialIcons name="email" size={24} color="#222" />
+                    <Text style={styles.agentActionText}>
+                      {t("sale.email")}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity
+                  style={styles.agentActionBtn}
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    setContactModalData({
+                      phone: data?.owner?.phoneNumber || undefined,
+                      email: data?.owner?.email || undefined,
+                      ownerID: data?.owner_id || data?.owner?.ID || undefined,
+                      recipientName:
+                        data.owner.firstName && data.owner.lastName
+                          ? `${data.owner.firstName} ${data.owner.lastName}`.trim()
+                          : data.owner.firstName ||
+                            data.owner.lastName ||
+                            t("sale.host", "Host"),
+                      hostAvatarURL: data?.owner?.avatarURL
+                    });
+                    setShowContactModal(true);
+                  }}
+                >
+                  <MaterialIcons name="message" size={24} color="#222" />
+                  <Text style={styles.agentActionText}>
+                    {t("sale.message")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>{t("sale.listedBy")}</Text>
+              <EmptyState
+                icon="👤"
+                title={t("sale.agentInfoUnavailableTitle")}
+                subtitle={t("sale.agentInfoUnavailableSubtitle")}
+              />
+            </View>
+          )}
+        </View>
+      </Animated.ScrollView>
+      {/* Options Modal - Clean Design */}
+      <Modal
+        visible={showOptionsModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowOptionsModal(false)}
+      >
+        <Pressable
+          style={styles.optionsModalBackdrop}
+          onPress={() => setShowOptionsModal(false)}
+        >
+          <View style={styles.optionsModalContainer}>
+            <View style={styles.optionsModalIndicator} />
+            <View style={styles.optionsModalHeader}>
+              <Text style={styles.optionsModalTitle}>
+                {t("common.options", "Options")}
+              </Text>
+              <Pressable
+                onPress={() => setShowOptionsModal(false)}
+                style={styles.optionsModalCloseBtn}
+              >
+                <X size={20} color="#222" />
+              </Pressable>
+            </View>
+            {canEdit && (
+              <Pressable
+                style={styles.optionsModalOption}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowOptionsModal(false);
+                  navigation.navigate("EditPropertySale", { propertyId: id });
+                }}
+              >
+                <PencilSimpleIcon
+                  size={22}
+                  color={theme["color-temporary-primary"]}
+                />
+                <Text style={styles.optionsModalOptionText}>
+                  {t("common.edit", "Edit Property")}
+                </Text>
+              </Pressable>
+            )}
+            {user && data?.city && (
+              <Pressable
+                style={styles.optionsModalOption}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowOptionsModal(false);
+                  handleToggleFavoriteCity();
+                }}
+                disabled={isSettingFavoriteCity}
+              >
+                <MapPin
+                  size={22}
+                  color={
+                    isFavoriteCity
+                      ? theme["color-temporary-primary"]
+                      : theme["color-temporary-primary"]
+                  }
+                  weight={isFavoriteCity ? "fill" : "regular"}
+                />
+                <Text style={styles.optionsModalOptionText}>
+                  {isFavoriteCity
+                    ? t("sale.removeFavoriteCity", "Remove from Favorite City")
+                    : t("sale.addFavoriteCity", "Add to Favorite City")}
+                </Text>
+              </Pressable>
+            )}
+            <Pressable
+              style={styles.optionsModalOption}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setShowOptionsModal(false);
+                setShowReportModal(true);
+              }}
+            >
+              <Flag size={22} color={theme["color-temporary-primary"]} />
+              <Text style={styles.optionsModalOptionText}>
+                {t("video.reportVideo", "Report")}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.optionsModalOption}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setShowOptionsModal(false);
+                setShowBlockModal(true);
+              }}
+            >
+              <ProhibitInset
+                size={22}
+                color={theme["color-temporary-primary"]}
+              />
+              <Text style={styles.optionsModalOptionText}>
+                {t("common.block", "Block")}
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+      {/* Report Modal - Clean Design */}
+      <Modal
+        visible={showReportModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowReportModal(false);
+          setReportReason("");
+        }}
+      >
+        <Pressable
+          style={styles.optionsModalBackdrop}
+          onPress={() => {
+            setShowReportModal(false);
+            setReportReason("");
+          }}
+        >
+          <View style={styles.reportModalContainer}>
+            <View style={styles.optionsModalIndicator} />
+            <View style={styles.optionsModalHeader}>
+              <Text style={styles.optionsModalTitle}>
+                {t("video.reportVideo", "Report")}
+              </Text>
+              <Pressable
+                onPress={() => {
+                  setShowReportModal(false);
+                  setReportReason("");
+                }}
+                style={styles.optionsModalCloseBtn}
+              >
+                <X size={20} color="#222" />
+              </Pressable>
+            </View>
+            <Text style={styles.reportModalDescription}>
+              {t("sale.whyReporting", "Why are you reporting this property?")}
+            </Text>
+            {[
+              {
+                key: "inappropriate",
+                label: t("video.reportInappropriate", "Inappropriate content"),
+                IconComp: Warning
+              },
+              {
+                key: "spam",
+                label: t("video.reportSpam", "Spam or misleading"),
+                IconComp: Flag
+              },
+              {
+                key: "fake",
+                label: t("video.reportFake", "Fake listing"),
+                IconComp: Trash
+              },
+              {
+                key: "other",
+                label: t("video.reportOther", "Other reason"),
+                IconComp: Question
+              }
+            ].map((r) => (
+              <Pressable
+                key={r.key}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setReportReason(r.key);
+                }}
+                style={[
+                  styles.reportOptionRow,
+                  reportReason === r.key && styles.reportOptionRowSelected
+                ]}
+              >
+                <r.IconComp
+                  size={20}
+                  color={
+                    reportReason === r.key
+                      ? "#FFF"
+                      : theme["color-temporary-primary"]
+                  }
+                />
+                <Text
+                  style={[
+                    styles.reportOptionText,
+                    reportReason === r.key && styles.reportOptionTextSelected
+                  ]}
+                >
+                  {r.label}
+                </Text>
+                {reportReason === r.key && (
+                  <Check size={18} color="#FFF" weight="bold" />
+                )}
+              </Pressable>
+            ))}
+            <Pressable
+              style={[
+                styles.reportSubmitBtn,
+                !reportReason && styles.reportSubmitBtnDisabled
+              ]}
+              disabled={!reportReason}
+              onPress={async () => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                try {
+                  if (!user?.accessToken) {
+                    Alert.alert(
+                      t("common.error"),
+                      t("auth.loginToContinue", "Please log in to continue")
+                    );
+                    return;
+                  }
+                  await api.post(`/property-sales/${id}/report`, {
+                    reason: reportReason
+                  });
+                  queryClient.invalidateQueries(["public-property-sales"]);
+                  queryClient.invalidateQueries(["publicPropertySales"]);
+                  queryClient.invalidateQueries(["organization-properties"]);
+                  setToast({
+                    message: t(
+                      "video.reportSuccess",
+                      "Thanks, we received your report."
+                    ) as string,
+                    type: "success"
+                  });
+                  setTimeout(() => navigation.goBack(), 350);
+                } catch (e) {
+                  setToast({
+                    message: t(
+                      "video.reportFailed",
+                      "Failed to submit report."
+                    ) as string,
+                    type: "error"
+                  });
+                } finally {
+                  setShowReportModal(false);
+                  setReportReason("");
+                }
+              }}
+            >
+              <Text style={styles.reportSubmitBtnText}>
+                {t("video.submitReport", "Submit Report")}
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+      {/* Block Choice Modal - Clean Design */}
+      <Modal
+        visible={showBlockModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowBlockModal(false)}
+      >
+        <Pressable
+          style={styles.optionsModalBackdrop}
+          onPress={() => setShowBlockModal(false)}
+        >
+          <View style={styles.optionsModalContainer}>
+            <View style={styles.optionsModalIndicator} />
+            <View style={styles.optionsModalHeader}>
+              <Text style={styles.optionsModalTitle}>
+                {t("common.chooseAction", "Choose Action")}
+              </Text>
+              <Pressable
+                onPress={() => setShowBlockModal(false)}
+                style={styles.optionsModalCloseBtn}
+              >
+                <X size={20} color="#222" />
+              </Pressable>
+            </View>
+            <Text style={styles.reportModalDescription}>
+              {t(
+                "sale.whatToDo",
+                "What would you like to do with this property?"
+              )}
+            </Text>
+            <Pressable
+              style={styles.optionsModalOption}
+              onPress={async () => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                try {
+                  if (!user?.accessToken) {
+                    Alert.alert(
+                      t("common.error"),
+                      t("auth.loginToContinue", "Please log in to continue")
+                    );
+                    return;
+                  }
+                  await api.post(`/property-sales/${id}/hide`, {
+                    reason: "not_interested"
+                  });
+                  queryClient.invalidateQueries(["public-property-sales"]);
+                  queryClient.invalidateQueries(["publicPropertySales"]);
+                  queryClient.invalidateQueries(["organization-properties"]);
+                  setToast({
+                    message: t(
+                      "settings.blockedContentDetails.propertyHidden",
+                      "This property has been hidden from your feed."
+                    ) as string,
+                    type: "success"
+                  });
+                  setTimeout(() => navigation.goBack(), 350);
+                } catch (e) {
+                  setToast({
+                    message: t(
+                      "settings.blockedContentDetails.unhideFailed",
+                      "Failed to hide property."
+                    ) as string,
+                    type: "error"
+                  });
+                } finally {
+                  setShowBlockModal(false);
+                }
+              }}
+            >
+              <EyeSlash size={22} color="#222" />
+              <Text style={styles.optionsModalOptionText}>
+                {t("sale.hideProperty", "Hide this property only")}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.optionsModalOption}
+              onPress={async () => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                try {
+                  const d: any = data || {};
+                  const targetOrgId = d?.organization?.id || d?.organization_id;
+                  if (!user?.accessToken) {
+                    Alert.alert(
+                      t("common.error"),
+                      t("auth.loginToContinue", "Please log in to continue")
+                    );
+                    return;
+                  }
+                  if (!targetOrgId) {
+                    Alert.alert(
+                      t("common.error"),
+                      "Unable to identify the organization to block."
+                    );
+                    return;
+                  }
+                  await api.post(`/organization/${targetOrgId}/block`);
+                  queryClient.invalidateQueries(["public-property-sales"]);
+                  queryClient.invalidateQueries(["organization-properties"]);
+                  setToast({
+                    message: t(
+                      "settings.blockedContentDetails.userBlocked",
+                      "This organization has been blocked."
+                    ) as string,
+                    type: "success"
+                  });
+                  setTimeout(() => navigation.goBack(), 350);
+                } catch (e) {
+                  setToast({
+                    message: t(
+                      "settings.blockedContentDetails.unblockFailed",
+                      "Failed to block organization."
+                    ) as string,
+                    type: "error"
+                  });
+                } finally {
+                  setShowBlockModal(false);
+                }
+              }}
+            >
+              <ProhibitInset
+                size={22}
+                color={theme["color-temporary-primary"]}
+              />
+              <Text style={styles.optionsModalOptionText}>
+                {t("sale.blockOrg", "Block this organization")}
+              </Text>
+            </Pressable>
+          </View>
+        </Pressable>
+      </Modal>
+      {/* Bottom CTA Bar - Simplified: Primary action + Menu */}
+      <View style={styles.bottomBarContainer}>
+        <View style={styles.bottomBarContent}>
+          {/* Primary Action - Make Offer (Most Important) */}
+          <Pressable
+            style={styles.bottomBarPrimaryButton}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              handleMakeOfferCTA();
+            }}
+          >
+            <Text style={styles.bottomBarPrimaryText}>
+              {t("sale.makeOffer", "Make Offer")}
+            </Text>
+          </Pressable>
+          {/* Quick Actions Row - Subtle, Non-disruptive */}
+          <View style={styles.bottomBarQuickActions}>
+            <Pressable
+              style={styles.bottomBarQuickAction}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setContactModalData({
+                  phone: data?.organization?.phone,
+                  email: data?.organization?.email,
+                  ownerID: ownerID || undefined,
+                  organizationName: data?.organization?.name,
+                  organizationImage: data?.organization?.banner_image,
+                  organizationWebsite: data?.organization?.website,
+                  recipientName: data?.organization?.name || "Agent"
+                });
+                setShowContactModal(true);
+              }}
+            >
+              <Phone size={16} color="#666" weight="regular" />
+              <Text style={styles.bottomBarQuickActionText}>
+                {t("sale.contact", "Contact")}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.bottomBarQuickAction}
+              onPress={() => {
+                Haptics.selectionAsync();
+                handleRequestTourCTA();
+              }}
+            >
+              <Calendar size={16} color="#666" weight="regular" />
+              <Text style={styles.bottomBarQuickActionText}>
+                {t("sale.tour", "Tour")}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+      {/* Contact Agent Modal - Draggable Bottom Sheet */}
+      <DraggableBottomSheet
+        visible={showContactModal}
+        onClose={() => {
+          setShowContactModal(false);
+          setContactModalData(null);
+        }}
+      >
+        <View style={styles.contactModalContent}>
+          {/* Modal Header */}
+          <View style={styles.contactModalHeader}>
+            <Text style={styles.contactModalTitle}>
+              {t("sale.contactAgent", "Contact Agent")}
+            </Text>
+            <Text style={styles.contactModalSubtitle}>
+              {t("sale.howToContact", "How would you like to contact?")}
+            </Text>
+          </View>
+
+          {/* Contact Options */}
+          <View style={styles.contactModalOptions}>
+            {/* Phone Option - Highlighted */}
+            {contactModalData?.phone && (
+              <Pressable
+                style={styles.contactOptionHighlighted}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  setShowContactModal(false);
+                  Linking.openURL(`tel:${contactModalData.phone}`);
+                  setContactModalData(null);
+                }}
+              >
+                <View style={styles.contactOptionIconBg}>
+                  <Phone size={24} color="#FFF" weight="fill" />
+                </View>
+                <View style={styles.contactOptionContent}>
+                  <Text style={styles.contactOptionTitle}>
+                    {t("sale.call", "Call")}
+                  </Text>
+                  <Text style={styles.contactOptionValue}>
+                    {contactModalData.phone}
+                  </Text>
+                </View>
+                <CaretRight size={20} color="#9CA3AF" />
+              </Pressable>
+            )}
+
+            {/* Email Option */}
+            {contactModalData?.email && (
+              <Pressable
+                style={styles.contactOptionRow}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowContactModal(false);
+                  Linking.openURL(`mailto:${contactModalData.email}`);
+                  setContactModalData(null);
+                }}
+              >
+                <View
+                  style={[
+                    styles.contactOptionIconBg,
+                    { backgroundColor: "#3B82F6" }
+                  ]}
+                >
+                  <Envelope size={24} color="#FFF" weight="fill" />
+                </View>
+                <View style={styles.contactOptionContent}>
+                  <Text style={styles.contactOptionTitle}>
+                    {t("sale.email", "Email")}
+                  </Text>
+                  <Text style={styles.contactOptionValue} numberOfLines={1}>
+                    {contactModalData.email}
+                  </Text>
+                </View>
+                <CaretRight size={20} color="#9CA3AF" />
+              </Pressable>
+            )}
+
+            {/* Message Option */}
+            {contactModalData?.ownerID && (
+              <Pressable
+                style={styles.contactOptionRow}
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setShowContactModal(false);
+                  const modalData = contactModalData;
+                  setContactModalData(null);
+                  (navigation as any).navigate("DirectMessage", {
+                    conversationID: 0,
+                    otherUserId: modalData.ownerID,
+                    recipientName:
+                      modalData.recipientName ||
+                      modalData.organizationName ||
+                      "Agent"
+                  });
+                }}
+              >
+                <View
+                  style={[
+                    styles.contactOptionIconBg,
+                    { backgroundColor: "#8B5CF6" }
+                  ]}
+                >
+                  <ChatCircle size={24} color="#FFF" weight="fill" />
+                </View>
+                <View style={styles.contactOptionContent}>
+                  <Text style={styles.contactOptionTitle}>
+                    {t("sale.message", "Message")}
+                  </Text>
+                  <Text style={styles.contactOptionValue}>
+                    {t("sale.messageSubtitle", "Send a direct message")}
+                  </Text>
+                </View>
+                <CaretRight size={20} color="#9CA3AF" />
+              </Pressable>
+            )}
+          </View>
+
+          {/* Organization Info */}
+          {(contactModalData?.organizationName ||
+            contactModalData?.organizationImage) && (
+            <View style={styles.contactModalOrgInfo}>
+              {contactModalData.organizationImage ? (
+                <Image
+                  source={{ uri: contactModalData.organizationImage }}
+                  style={styles.contactModalOrgAvatar}
+                />
+              ) : (
+                <View
+                  style={[
+                    styles.contactModalOrgAvatar,
+                    styles.contactModalOrgAvatarEmpty
+                  ]}
+                >
+                  <Buildings size={20} color="#9CA3AF" />
+                </View>
+              )}
+              <View style={styles.contactModalOrgDetails}>
+                <Text style={styles.contactModalOrgName}>
+                  {contactModalData.organizationName || "Real Estate"}
+                </Text>
+                {contactModalData.organizationWebsite && (
+                  <Text style={styles.contactModalOrgWebsite} numberOfLines={1}>
+                    {contactModalData.organizationWebsite}
+                  </Text>
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Close Button */}
+          <Pressable
+            style={styles.contactModalCloseBtn}
+            onPress={() => {
+              Haptics.selectionAsync();
+              setShowContactModal(false);
+              setContactModalData(null);
+            }}
+          >
+            <Text style={styles.contactModalCloseBtnText}>
+              {t("common.close", "Close")}
+            </Text>
+          </Pressable>
+        </View>
+      </DraggableBottomSheet>
+
+      {/* Floor Plan Modal - Simplified to prevent crashes */}
+      <Modal
+        visible={showFloorPlanModal && !!selectedFloorPlan}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => {
+          setSelectedFloorPlan(null);
+          setShowFloorPlanModal(false);
+        }}
+        statusBarTranslucent={false}
+      >
+        {selectedFloorPlan && (
+          <SafeAreaView style={styles.floorPlanModalContainer}>
+            {/* Header */}
+            <View style={styles.floorPlanModalHeader}>
+              <Text style={styles.floorPlanModalTitle}>
+                {selectedFloorPlan?.name || "Floor Plan"}
+              </Text>
+              <Pressable
+                onPress={() => {
+                  Haptics.selectionAsync();
+                  setSelectedFloorPlan(null);
+                  setShowFloorPlanModal(false);
+                }}
+                style={styles.floorPlanModalCloseBtn}
+              >
+                <X size={22} color="#374151" />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              style={styles.floorPlanModalScroll}
+              contentContainerStyle={styles.floorPlanModalContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Area Badge */}
+              {typeof selectedFloorPlan?.area_sqm === "number" &&
+                selectedFloorPlan.area_sqm > 0 && (
+                  <View style={styles.floorPlanAreaBadge}>
+                    <Ruler size={16} color="#6B7280" />
+                    <Text style={styles.floorPlanAreaText}>
+                      {selectedFloorPlan.area_sqm} m²
+                    </Text>
+                  </View>
+                )}
+
+              {/* Stats Row */}
+              <View style={styles.floorPlanStatsRow}>
+                {typeof selectedFloorPlan?.bedrooms === "number" && (
+                  <View style={styles.floorPlanStatItem}>
+                    <Text style={styles.floorPlanStatValue}>
+                      {selectedFloorPlan.bedrooms}
+                    </Text>
+                    <Text style={styles.floorPlanStatLabel}>
+                      {t("sale.bedrooms")}
+                    </Text>
+                  </View>
+                )}
+                {typeof selectedFloorPlan?.bathrooms === "number" && (
+                  <View style={styles.floorPlanStatItem}>
+                    <Text style={styles.floorPlanStatValue}>
+                      {selectedFloorPlan.bathrooms}
+                    </Text>
+                    <Text style={styles.floorPlanStatLabel}>
+                      {t("sale.bathrooms")}
+                    </Text>
+                  </View>
+                )}
+                {typeof selectedFloorPlan?.kitchens === "number" &&
+                  selectedFloorPlan.kitchens > 0 && (
+                    <View style={styles.floorPlanStatItem}>
+                      <Text style={styles.floorPlanStatValue}>
+                        {selectedFloorPlan.kitchens}
+                      </Text>
+                      <Text style={styles.floorPlanStatLabel}>
+                        {t("sale.kitchens", "Kitchens")}
+                      </Text>
+                    </View>
+                  )}
+                {typeof selectedFloorPlan?.living_rooms === "number" &&
+                  selectedFloorPlan.living_rooms > 0 && (
+                    <View style={styles.floorPlanStatItem}>
+                      <Text style={styles.floorPlanStatValue}>
+                        {selectedFloorPlan.living_rooms}
+                      </Text>
+                      <Text style={styles.floorPlanStatLabel}>
+                        {t("sale.livingRooms", "Living")}
+                      </Text>
+                    </View>
+                  )}
+                {typeof selectedFloorPlan?.balconies === "number" &&
+                  selectedFloorPlan.balconies > 0 && (
+                    <View style={styles.floorPlanStatItem}>
+                      <Text style={styles.floorPlanStatValue}>
+                        {selectedFloorPlan.balconies}
+                      </Text>
+                      <Text style={styles.floorPlanStatLabel}>
+                        {t("sale.balconies", "Balconies")}
+                      </Text>
+                    </View>
+                  )}
+              </View>
+
+              {/* Description */}
+              {!!selectedFloorPlan?.notes && (
+                <View style={styles.floorPlanDescSection}>
+                  <Text style={styles.floorPlanDescTitle}>
+                    {t("common.description", "Description")}
+                  </Text>
+                  <Text style={styles.floorPlanDescText}>
+                    {selectedFloorPlan.notes}
+                  </Text>
+                </View>
+              )}
+
+              {/* Images - Simplified without nested zoom */}
+              {Array.isArray(selectedFloorPlan?.images) &&
+                selectedFloorPlan.images.filter(Boolean).length > 0 && (
+                  <View style={styles.floorPlanImagesSection}>
+                    <Text style={styles.floorPlanImagesTitle}>
+                      {t("common.images", "Images")}
+                    </Text>
+                    {selectedFloorPlan.images
+                      .filter(Boolean)
+                      .map((u: string, i: number) => (
+                        <Pressable
+                          key={`fp-img-${i}`}
+                          onPress={() => {
+                            Haptics.selectionAsync();
+                            setFloorPlanImages(
+                              selectedFloorPlan.images.filter(Boolean)
+                            );
+                            setSelectedFloorPlanImageIndex(i);
+                            setShowFloorPlanGallery(true);
+                          }}
+                          style={styles.floorPlanImageWrapper}
+                        >
+                          <Image
+                            source={{ uri: u }}
+                            style={styles.floorPlanImage}
+                            resizeMode="contain"
+                          />
+                          <View style={styles.floorPlanImageOverlay}>
+                            <CornersOut size={20} color="#FFF" />
+                            <Text style={styles.floorPlanImageOverlayText}>
+                              {t("common.tapToZoom", "Tap to zoom")}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      ))}
+                  </View>
+                )}
+            </ScrollView>
+          </SafeAreaView>
+        )}
+      </Modal>
+
+      {/* Floor Plan Fullscreen Gallery Modal */}
+      <Modal
+        visible={showFloorPlanGallery}
+        onRequestClose={() => setShowFloorPlanGallery(false)}
+        animationType="none"
+      >
+        <SafeAreaView style={styles.floorPlanGalleryModalContainer}>
+          <View style={styles.floorPlanGalleryFullscreenHeader}>
+            <TouchableOpacity
+              style={styles.floorPlanGalleryFullscreenCloseButton}
+              onPress={() => setShowFloorPlanGallery(false)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <MaterialIcons name="close" size={28} color="#FFFFFF" />
+            </TouchableOpacity>
+            <Text style={styles.floorPlanGalleryFullscreenHeaderText}>
+              {selectedFloorPlanImageIndex + 1} / {floorPlanImages.length}
+            </Text>
+            <View style={{ width: 40 }} />
+          </View>
+          <ScrollView
+            ref={floorPlanGalleryRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={(e) => {
+              const index = Math.round(e.nativeEvent.contentOffset.x / width);
+              setSelectedFloorPlanImageIndex(index);
+            }}
+            contentOffset={{ x: selectedFloorPlanImageIndex * width, y: 0 }}
+          >
+            {floorPlanImages.map((u: string, i: number) => (
+              <View
+                key={`floor-gallery-img-${i}`}
+                style={[
+                  styles.floorPlanGalleryFullscreenImageContainer,
+                  { width }
+                ]}
+              >
+                <ScrollView
+                  maximumZoomScale={5}
+                  minimumZoomScale={1}
+                  showsVerticalScrollIndicator={false}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={
+                    styles.floorPlanGalleryFullscreenZoomContainer
+                  }
+                  bouncesZoom={true}
+                >
+                  <Image
+                    source={{ uri: u }}
+                    style={styles.floorPlanGalleryFullscreenImage}
+                    resizeMode="contain"
+                  />
+                </ScrollView>
+              </View>
+            ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+      {/* Image Gallery Modal - Fullscreen */}
+      <Modal
+        visible={showGalleryModal}
+        onRequestClose={() => setShowGalleryModal(false)}
+        animationType="fade"
+        statusBarTranslucent
+      >
+        <SafeAreaView style={styles.galleryModalContainer}>
+          <View style={styles.galleryModalHeader}>
+            <Text style={styles.galleryModalCounter}>
+              {selectedImageIndex + 1} / {allGalleryImages.length}
+            </Text>
+            <TouchableOpacity
+              style={styles.galleryCloseButton}
+              onPress={() => setShowGalleryModal(false)}
+            >
+              <MaterialIcons name="close" size={28} color="#FFF" />
+            </TouchableOpacity>
+          </View>
+          <ScrollView
+            ref={galleryRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={(e) => {
+              const index = Math.round(e.nativeEvent.contentOffset.x / width);
+              setSelectedImageIndex(index);
+            }}
+          >
+            {allGalleryImages.map((u: string, i: number) => (
+              <View
+                key={`gallery-img-${i}`}
+                style={[styles.galleryImageContainer, { width }]}
+              >
+                <ScrollView
+                  maximumZoomScale={3}
+                  minimumZoomScale={1}
+                  showsVerticalScrollIndicator={false}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.galleryZoomContainer}
+                >
+                  <Image
+                    source={{ uri: u }}
+                    style={styles.galleryImage}
+                    resizeMode="contain"
+                  />
+                </ScrollView>
+              </View>
+            ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+
+      {/* Video Fullscreen Modal */}
+      {Array.isArray(data?.videos) && data.videos.length > 0 && (
+        <Modal
+          visible={showVideoFullscreenModal}
+          onRequestClose={() => setShowVideoFullscreenModal(false)}
+          animationType="fade"
+          statusBarTranslucent
+          presentationStyle="fullScreen"
+        >
+          <SafeAreaView style={styles.videoFullscreenContainer}>
+            <TouchableOpacity
+              style={styles.videoFullscreenCloseButton}
+              onPress={() => setShowVideoFullscreenModal(false)}
+            >
+              <MaterialIcons name="close" size={28} color="#FFF" />
+            </TouchableOpacity>
+            <Video
+              ref={fullscreenVideoRef}
+              style={styles.videoFullscreen}
+              source={{ uri: data.videos[0] }}
+              useNativeControls={true}
+              resizeMode={ResizeMode.CONTAIN}
+              shouldPlay={true}
+              isLooping={false}
+            />
+          </SafeAreaView>
+        </Modal>
+      )}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          duration={toast.duration || 2200}
+          onHide={() => setToast(null)}
+        />
+      )}
+    </View>
+  );
+};
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#FFF"
+  },
+  // Clean Floor Plan Row Styles
+  floorPlanRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+    minHeight: 56
+  },
+  floorPlanThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: "#F3F4F6"
+  },
+  floorPlanInfo: {
+    flex: 1,
+    marginLeft: 10,
+    marginRight: 8
+  },
+  floorPlanName: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+    marginBottom: 3,
+    lineHeight: 18
+  },
+  floorPlanSpecs: {
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 16
+  },
+  // Floor Plan Modal Styles - Simplified
+  floorPlanModalContainer: {
+    flex: 1,
+    backgroundColor: "#FFF"
+  },
+  floorPlanModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E7EB",
+    height: 56
+  },
+  floorPlanModalTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#111827",
+    lineHeight: 20
+  },
+  floorPlanModalCloseBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  floorPlanModalScroll: {
+    flex: 1
+  },
+  floorPlanModalContent: {
+    padding: 16,
+    paddingBottom: 40
+  },
+  floorPlanAreaBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    alignSelf: "flex-start",
+    marginBottom: 16,
+    gap: 6
+  },
+  floorPlanAreaText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#374151",
+    lineHeight: 18
+  },
+  floorPlanStatsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: 16,
+    backgroundColor: "#F9FAFB",
+    borderRadius: 8,
+    padding: 10
+  },
+  floorPlanStatItem: {
+    width: "33.33%",
+    alignItems: "center",
+    paddingVertical: 10
+  },
+  floorPlanStatValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+    lineHeight: 22
+  },
+  floorPlanStatLabel: {
+    fontSize: 11,
+    color: "#6B7280",
+    marginTop: 3,
+    lineHeight: 14
+  },
+  floorPlanDescSection: {
+    marginBottom: 20
+  },
+  floorPlanDescTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+    marginBottom: 6,
+    lineHeight: 20
+  },
+  floorPlanDescText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#4B5563"
+  },
+  floorPlanImagesSection: {
+    marginBottom: 20
+  },
+  floorPlanImagesTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111827",
+    marginBottom: 8,
+    lineHeight: 20
+  },
+  floorPlanImageWrapper: {
+    marginBottom: 10,
+    borderRadius: 10,
+    overflow: "hidden",
+    backgroundColor: "#F3F4F6"
+  },
+  floorPlanImage: {
+    width: "100%",
+    height: 200
+  },
+  floorPlanImageOverlay: {
+    position: "absolute",
+    bottom: 8,
+    right: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    gap: 4
+  },
+  floorPlanImageOverlayText: {
+    fontSize: 11,
+    color: "#FFF",
+    fontWeight: "500"
+  },
+  safeArea: {
+    flex: 0,
+    backgroundColor: "transparent"
+  },
+  floatingHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 100,
+    backgroundColor: "#FFF",
+    borderBottomWidth: 0
+  },
+  transparentHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 99
+  },
+  // Compact Header Styles - TikTok/WeChat style
+  headerCompact: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    justifyContent: "space-between",
+    height: 56
+  },
+  headerBtnCompact: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  headerBtnTransparent: {
+    backgroundColor: "rgba(0,0,0,0.25)"
+  },
+  headerTitleCompact: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#222",
+    textAlign: "center",
+    marginHorizontal: 8,
+    lineHeight: 20
+  },
+  headerActionsCompact: {
+    flexDirection: "row",
+    gap: 4
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    justifyContent: "space-between"
+  },
+  headerBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  transparentBtn: {
+    backgroundColor: "transparent"
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#222",
+    textAlign: "center"
+  },
+  headerActions: {
+    flexDirection: "row",
+    gap: 16
+  },
+  hero: {
+    height: 280,
+    backgroundColor: "#F0F0F0"
+  },
+  heroMediaContainer: {
+    height: 280,
+    position: "relative",
+    backgroundColor: "#000"
+  },
+  heroVideoContainer: {
+    width: "100%",
+    height: 280,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  heroVideo: {
+    width: "100%",
+    height: "100%"
+  },
+  heroVideoOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.2)"
+  },
+  heroVideoPlayButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "rgba(255,255,255,0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8
+  },
+  heroMediaTabs: {
+    position: "absolute",
+    bottom: 16,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 16
+  },
+  heroMediaTab: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 24,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    gap: 8,
+    minWidth: 110
+  },
+  heroMediaTabActive: {
+    backgroundColor: "rgba(255,255,255,0.25)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.4)"
+  },
+  heroMediaTabText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.7)",
+    letterSpacing: 0.3
+  },
+  heroMediaTabTextActive: {
+    color: "#FFF",
+    fontWeight: "700"
+  },
+  noImage: {
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  noImageText: {
+    fontSize: 60
+  },
+  noImageSubtext: {
+    fontSize: 14,
+    color: "#717171"
+  },
+  imageCounter: {
+    position: "absolute",
+    bottom: 70,
+    right: 16,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 16,
+    zIndex: 10
+  },
+  imageCounterText: {
+    color: "#FFF",
+    fontWeight: "600",
+    fontSize: 13
+  },
+  // Compact Content Styles - Dense spacing
+  contentCompact: {
+    paddingHorizontal: 16
+  },
+  content: {
+    paddingHorizontal: 16
+  },
+  sectionCompact: {
+    marginVertical: 12
+  },
+  section: {
+    marginVertical: 16
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#EEEEEE",
+    marginVertical: 8
+  },
+  // Compact Price & Title Styles - TikTok density
+  priceTagCompact: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#222",
+    lineHeight: 24
+  },
+  propertyTitleCompact: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#222",
+    marginTop: 6,
+    lineHeight: 20
+  },
+  addressRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 6,
+    gap: 6
+  },
+  addressCompact: {
+    fontSize: 12,
+    color: "#717171",
+    flex: 1,
+    lineHeight: 16
+  },
+  priceTag: {
+    fontSize: 32,
+    fontWeight: "bold",
+    color: "#222"
+  },
+  propertyTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#222",
+    marginTop: 8
+  },
+  address: {
+    fontSize: 16,
+    color: "#717171",
+    marginTop: 4
+  },
+  // Compact Stats Styles - Dense grid
+  statsRowCompact: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 8,
+    paddingVertical: 10,
+    marginVertical: 8
+  },
+  statCardCompact: {
+    alignItems: "center",
+    flex: 1
+  },
+  statValueCompact: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#222",
+    marginTop: 4,
+    lineHeight: 18
+  },
+  statLabelCompact: {
+    fontSize: 11,
+    color: "#717171",
+    marginTop: 3,
+    lineHeight: 14
+  },
+  statsRow: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    marginTop: 16
+  },
+  statCard: {
+    alignItems: "center",
+    flex: 1
+  },
+  statValue: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#222",
+    marginTop: 4
+  },
+  statLabel: {
+    fontSize: 14,
+    color: "#717171"
+  },
+  // Compact Section Titles - Max 20px
+  sectionTitleSmall: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#222",
+    marginBottom: 8,
+    lineHeight: 20
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#222",
+    marginBottom: 10,
+    lineHeight: 22
+  },
+  // Compact Description - Tight line height
+  descriptionSmall: {
+    fontSize: 14,
+    color: "#444",
+    lineHeight: 20
+  },
+  description: {
+    fontSize: 14,
+    color: "#222",
+    lineHeight: 20
+  },
+  // View More/Less Button - Compact
+  viewMoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    gap: 6,
+    paddingVertical: 4
+  },
+  viewMoreText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: theme["color-temporary-primary"],
+    lineHeight: 18
+  },
+  // Compact Feature Grid - Dense spacing
+  featureGridCompact: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  featureItemCompact: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    width: "48%",
+    paddingVertical: 4
+  },
+  featureTextSmall: {
+    fontSize: 13,
+    color: "#333",
+    lineHeight: 18
+  },
+  featureGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 16
+  },
+  featureItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    width: "48%"
+  },
+  featureText: {
+    fontSize: 14,
+    color: "#222",
+    lineHeight: 20
+  },
+  videoContainer: {
+    height: 200,
+    borderRadius: 8,
+    overflow: "hidden",
+    position: "relative",
+    backgroundColor: "#000000"
+  },
+  video: {
+    flex: 1,
+    width: "100%",
+    height: "100%"
+  },
+  videoTouchArea: {
+    width: "100%",
+    height: "100%",
+    position: "relative"
+  },
+  videoControlsOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    justifyContent: "space-between"
+  },
+  videoTopControls: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    padding: 12,
+    paddingTop: 8
+  },
+  videoBottomControls: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    paddingBottom: 8,
+    backgroundColor: "rgba(0, 0, 0, 0.6)"
+  },
+  videoControlButton: {
+    padding: 8,
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  videoCenterPlayButton: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    transform: [{ translateX: -40 }, { translateY: -40 }],
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  videoPlayCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(0, 0, 0, 0.6)",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  videoTimeText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+    marginHorizontal: 8,
+    minWidth: 80
+  },
+  videoProgressContainer: {
+    flex: 1,
+    marginHorizontal: 8,
+    height: 20,
+    justifyContent: "center",
+    paddingVertical: 8
+  },
+  videoProgressBar: {
+    height: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    borderRadius: 2,
+    position: "relative",
+    width: "100%"
+  },
+  videoProgressFill: {
+    height: "100%",
+    backgroundColor: "#FF385C",
+    borderRadius: 2,
+    position: "absolute",
+    left: 0,
+    top: 0
+  },
+  videoProgressThumb: {
+    position: "absolute",
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#FF385C",
+    top: -4,
+    marginLeft: -6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 3
+  },
+  map: {
+    height: 240,
+    borderRadius: 8
+  },
+  mapAddress: {
+    fontSize: 13,
+    color: "#717171",
+    marginTop: 10,
+    lineHeight: 18
+  },
+  markerBubble: {
+    backgroundColor: "#FFF",
+    borderRadius: 20,
+    padding: 6,
+    shadowColor: "#000",
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+    borderWidth: 2,
+    borderColor: "#FFF"
+  },
+  markerHouse: {
+    backgroundColor: theme["color-temporary-primary"],
+    padding: 8,
+    borderRadius: 24,
+    borderWidth: 3,
+    borderColor: "#FFF",
+    shadowOpacity: 0.25,
+    shadowRadius: 8
+  },
+  markerSchool: {
+    backgroundColor: "#E6F2FF",
+    borderColor: "#0066CC"
+  },
+  markerHospital: {
+    backgroundColor: "#FEE2E2",
+    borderColor: "#DC2626"
+  },
+  markerRestaurant: {
+    backgroundColor: "#FEF3C7",
+    borderColor: "#F59E0B"
+  },
+  tabBar: {
+    flexDirection: "row",
+    backgroundColor: "#F7F7F7",
+    borderRadius: 8,
+    padding: 4
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    borderRadius: 6,
+    minHeight: 36,
+    justifyContent: "center"
+  },
+  tabButtonActive: {
+    backgroundColor: "#FFF"
+  },
+  tabButtonText: {
+    fontWeight: "600",
+    color: "#717171",
+    fontSize: 13,
+    lineHeight: 18
+  },
+  tabButtonTextActive: {
+    color: "#222"
+  },
+  poiContainer: {
+    marginTop: 12
+  },
+  poiCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    minHeight: 56
+  },
+  poiImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+    marginRight: 12
+  },
+  poiImageEmpty: {
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#F0F0F0"
+  },
+  poiEmptyIcon: {
+    fontSize: 40
+  },
+  // Bottom Bar - Simplified Design
+  bottomBarContainer: {
+    backgroundColor: "#FFF",
+    paddingHorizontal: 16,
+    paddingTop: 5,
+    paddingBottom: 30,
+    borderTopWidth: 1,
+    borderTopColor: "#F3F4F6",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 8
+  },
+  bottomBarContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 8,
+    justifyContent: "space-between"
+  },
+  bottomBarPrimaryButton: {
+    // flex: 1,
+    paddingHorizontal: 12,
+    backgroundColor: theme["color-temporary-primary"],
+    height: 40,
+    borderRadius: 5,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  bottomBarPrimaryText: {
+    color: "#FFF",
+    fontWeight: "700",
+    fontSize: 13,
+    letterSpacing: 0.1
+  },
+  bottomBarMenuButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 12,
+    backgroundColor: "#F9FAFB",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#E5E7EB"
+  },
+  bottomBarQuickActions: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 24,
+    paddingTop: 8
+  },
+  bottomBarQuickAction: {
+    alignItems: "center",
+    gap: 4
+  },
+  bottomBarQuickActionText: {
+    fontSize: 11,
+    color: "#666",
+    fontWeight: "500"
+  },
+  poiContent: {
+    flex: 1,
+    minWidth: 0
+  },
+  poiNameRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 6,
+    flex: 1
+  },
+  poiIcon: {
+    marginTop: 2,
+    flexShrink: 0
+  },
+  poiName: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#222",
+    lineHeight: 20,
+    flex: 1,
+    flexWrap: "wrap"
+  },
+  poiDistance: {
+    fontSize: 12,
+    color: "#717171",
+    lineHeight: 16,
+    marginTop: 4
+  },
+  mainPriceContainer: {
+    alignItems: "center",
+    marginVertical: 12
+  },
+  mainPriceLabel: {
+    fontSize: 13,
+    color: "#717171",
+    lineHeight: 18
+  },
+  mainPriceValue: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#222",
+    lineHeight: 24
+  },
+  insightOptions: {
+    flexDirection: "row",
+    justifyContent: "space-evenly",
+    gap: 8
+  },
+  insightOption: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    backgroundColor: "#F7F7F7"
+  },
+  insightOptionSelected: {
+    backgroundColor: theme["color-temporary-primary"]
+  },
+  insightOptionText: {
+    color: "#222",
+    fontWeight: "600",
+    fontSize: 13,
+    lineHeight: 18
+  },
+  insightOptionTextSelected: {
+    color: "#FFF"
+  },
+  insightNote: {
+    textAlign: "center",
+    color: "#717171",
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 16
+  },
+  agentCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12
+  },
+  agentAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    marginRight: 12
+  },
+  agentAvatarEmpty: {
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#F0F0F0"
+  },
+  agentAvatarText: {
+    fontSize: 24,
+    color: "#222"
+  },
+  agentInfo: {},
+  agentName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#222",
+    lineHeight: 20
+  },
+  agentContact: {
+    fontSize: 13,
+    color: "#717171",
+    lineHeight: 18,
+    marginTop: 2
+  },
+  agentWebsite: {
+    fontSize: 13,
+    color: theme["color-temporary-primary"],
+    lineHeight: 18,
+    marginTop: 2
+  },
+  // Host Card Styles (Professional - matches agent card)
+  hostCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 12,
+    backgroundColor: "#FAFAFA",
+    borderRadius: 12,
+    padding: 12
+  },
+  hostAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    marginRight: 12
+  },
+  hostAvatarEmpty: {
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: theme["color-temporary-primary"]
+  },
+  hostAvatarText: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#FFFFFF"
+  },
+  hostInfo: {
+    flex: 1
+  },
+  hostName: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#222",
+    lineHeight: 22,
+    marginBottom: 4
+  },
+  hostContact: {
+    fontSize: 14,
+    color: "#717171",
+    lineHeight: 20,
+    marginTop: 2
+  },
+  hostEmail: {
+    fontSize: 14,
+    color: "#717171",
+    lineHeight: 20,
+    marginTop: 2
+  },
+  hostBio: {
+    fontSize: 13,
+    color: "#717171",
+    lineHeight: 18,
+    marginTop: 6
+  },
+  agentActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8
+  },
+  agentActionBtn: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: "#F7F7F7",
+    minHeight: 40,
+    justifyContent: "center"
+  },
+  agentActionText: {
+    marginTop: 4,
+    fontWeight: "600",
+    color: "#222",
+    fontSize: 12,
+    lineHeight: 16
+  },
+  // New Bottom Bar Styles - Compact
+  bottomBarNew: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFF",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#EEEEEE",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 3
+  },
+  bottomBarContentNew: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between"
+  },
+  // Contact Button - Green, Left Side - MAX 40px height
+  contactButtonGreen: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#10B981",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    height: 40,
+    gap: 6
+  },
+  contactButtonGreenText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#FFF",
+    lineHeight: 18
+  },
+  // Stacked Buttons Container - Right Side - MAX 40px height
+  stackedButtonsContainer: {
+    flex: 1.2,
+    gap: 8,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  stackedButtonOutline: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    borderWidth: 1.5,
+    paddingHorizontal: 12,
+    borderColor: "#222",
+    backgroundColor: "#FFF",
+    borderRadius: 8,
+    height: 40
+  },
+  stackedButtonOutlineText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#222",
+    lineHeight: 18
+  },
+  stackedButtonFilled: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: theme["color-temporary-primary"],
+    borderRadius: 8,
+    height: 40
+  },
+  stackedButtonFilledText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#FFF",
+    lineHeight: 18
+  },
+  bottomBar: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: "#FFF",
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#E0E0E0"
+  },
+  ctaButtonSecondary: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#222",
+    alignItems: "center"
+  },
+  ctaButtonSecondaryText: {
+    fontWeight: "bold",
+    color: "#222"
+  },
+  ctaButtonPrimary: {
+    flex: 1,
+    padding: 16,
+    borderRadius: 8,
+    backgroundColor: theme["color-temporary-primary"],
+    alignItems: "center"
+  },
+  ctaButtonPrimaryText: {
+    fontWeight: "bold",
+    color: "#FFF"
+  },
+  // Options Modal Styles
+  optionsModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.3)",
+    justifyContent: "flex-end"
+  },
+  optionsModalContainer: {
+    backgroundColor: "#FFF",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 20
+  },
+  optionsModalIndicator: {
+    width: 36,
+    height: 4,
+    backgroundColor: "#E5E7EB",
+    borderRadius: 2,
+    alignSelf: "center",
+    marginTop: 10,
+    marginBottom: 10
+  },
+  optionsModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6"
+  },
+  optionsModalTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#111827",
+    lineHeight: 20
+  },
+  optionsModalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  optionsModalOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6",
+    gap: 12,
+    minHeight: 48
+  },
+  optionsModalOptionText: {
+    fontSize: 14,
+    color: "#222",
+    lineHeight: 20
+  },
+  // Report Modal Styles
+  reportModalContainer: {
+    backgroundColor: "#FFF",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 20
+  },
+  reportModalDescription: {
+    fontSize: 13,
+    color: "#6B7280",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    lineHeight: 18
+  },
+  reportOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 8,
+    backgroundColor: "#F9FAFB",
+    gap: 10,
+    minHeight: 44
+  },
+  reportOptionRowSelected: {
+    backgroundColor: theme["color-temporary-primary"]
+  },
+  reportOptionText: {
+    flex: 1,
+    fontSize: 14,
+    color: "#374151",
+    lineHeight: 20
+  },
+  reportOptionTextSelected: {
+    color: "#FFF",
+    fontWeight: "600"
+  },
+  reportSubmitBtn: {
+    backgroundColor: theme["color-temporary-primary"],
+    marginHorizontal: 16,
+    marginTop: 10,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: "center",
+    height: 44,
+    justifyContent: "center"
+  },
+  reportSubmitBtnDisabled: {
+    backgroundColor: "#E5E7EB"
+  },
+  reportSubmitBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#FFF",
+    lineHeight: 20
+  },
+  sheetContent: {
+    padding: 16
+  },
+  sheetTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    color: "#222"
+  },
+  sheetSubtitle: {
+    fontSize: 16,
+    color: "#717171",
+    marginTop: 4
+  },
+  sheetOptionContent: {
+    marginLeft: 16
+  },
+  sheetOptionTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#222"
+  },
+  sheetOptionSubtitle: {
+    fontSize: 14,
+    color: "#717171"
+  },
+  skeleton: {
+    backgroundColor: "#F0F0F0",
+    borderRadius: 4
+  },
+  // Floor Plan Gallery Fullscreen Modal Styles
+  floorPlanGalleryModalContainer: {
+    flex: 1,
+    backgroundColor: "#000000"
+  },
+  floorPlanGalleryFullscreenHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: "rgba(0, 0, 0, 0.8)",
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10
+  },
+  floorPlanGalleryFullscreenCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  floorPlanGalleryFullscreenHeaderText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#FFFFFF"
+  },
+  floorPlanGalleryFullscreenImageContainer: {
+    height: Dimensions.get("window").height,
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  floorPlanGalleryFullscreenZoomContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  floorPlanGalleryFullscreenImage: {
+    width: Dimensions.get("window").width,
+    height: Dimensions.get("window").height
+  },
+  floorThumb: {
+    width: 100,
+    height: 100,
+    borderRadius: 12,
+    backgroundColor: "#F0F0F0"
+  },
+  floorMoreBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 12,
+    gap: 4
+  },
+  floorMoreText: {
+    color: theme["color-temporary-primary"],
+    fontWeight: "bold"
+  },
+  emptyState: {
+    alignItems: "center",
+    padding: 32
+  },
+  emptyIcon: {
+    fontSize: 48
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#222",
+    marginTop: 16
+  },
+  emptySubtitle: {
+    fontSize: 16,
+    color: "#717171",
+    textAlign: "center",
+    marginTop: 8
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end"
+  },
+  airbnbModalContainer: {
+    backgroundColor: "#FFF",
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    padding: 16
+  },
+  airbnbModalDescription: {
+    fontSize: 16,
+    color: "#717171",
+    marginBottom: 16
+  },
+  airbnbModalOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+    gap: 16
+  },
+  airbnbModalOptionText: {
+    fontSize: 18,
+    color: "#222"
+  },
+  airbnbReportOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+    gap: 16
+  },
+  airbnbReportOptionSelected: {
+    backgroundColor: "#F7F7F7"
+  },
+  airbnbReportOptionText: {
+    fontSize: 18,
+    color: theme["color-temporary-primary"]
+  },
+  airbnbReportOptionTextSelected: {
+    color: theme["color-temporary-primary"]
+  },
+  airbnbModalSubmitButton: {
+    backgroundColor: theme["color-temporary-primary"],
+    padding: 16,
+    borderRadius: 8,
+    alignItems: "center",
+    marginTop: 16
+  },
+  airbnbModalSubmitButtonDisabled: {
+    backgroundColor: "#E0E0E0"
+  },
+  airbnbModalSubmitButtonText: {
+    color: "#FFF",
+    fontWeight: "bold",
+    fontSize: 16
+  },
+  airbnbSheetBackground: {
+    backgroundColor: "#FFF"
+  },
+  airbnbSheetIndicator: {
+    backgroundColor: "#E0E0E0",
+    width: 48,
+    height: 5
+  },
+  airbnbSheetOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E0E0E0",
+    gap: 16
+  },
+  groupSection: {
+    backgroundColor: "#FFF",
+    borderRadius: 8,
+    padding: 12,
+    marginHorizontal: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1
+  },
+  groupHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  groupTextContainer: {
+    flex: 1
+  },
+  groupTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#222",
+    lineHeight: 20
+  },
+  groupSubtitle: {
+    fontSize: 13,
+    color: "#717171",
+    marginTop: 4,
+    lineHeight: 18
+  },
+  groupImage: {
+    width: 100,
+    height: 60,
+    borderRadius: 8
+  },
+  groupButton: {
+    backgroundColor: theme["color-temporary-primary"],
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    marginTop: 12,
+    height: 40,
+    justifyContent: "center"
+  },
+  groupButtonText: {
+    color: "#FFF",
+    fontWeight: "600",
+    fontSize: 14,
+    lineHeight: 20
+  },
+  galleryModalContainer: {
+    flex: 1,
+    backgroundColor: "#000"
+  },
+  galleryModalHeader: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 50,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+    backgroundColor: "transparent",
+    zIndex: 10
+  },
+  galleryModalCounter: {
+    color: "#FFF",
+    fontSize: 16,
+    fontWeight: "600",
+    backgroundColor: "rgba(0,0,0,0.5)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16
+  },
+  galleryImageContainer: {
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  galleryZoomContainer: {
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  galleryImage: {
+    width: Dimensions.get("window").width,
+    height: Dimensions.get("window").height
+  },
+  galleryCloseButton: {
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderRadius: 20,
+    padding: 10,
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  videoFullscreenContainer: {
+    flex: 1,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  videoFullscreenCloseButton: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderRadius: 20,
+    padding: 10,
+    width: 40,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 100
+  },
+  videoFullscreen: {
+    width: Dimensions.get("window").width,
+    height: Dimensions.get("window").height
+  },
+  floorRight: {
+    width: 100,
+    height: 100,
+    borderRadius: 12
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center"
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#222"
+  },
+  modalCloseButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16
+  },
+  modalItem: {
+    marginBottom: 16,
+    padding: 16,
+    backgroundColor: "#F7F7F7",
+    borderRadius: 12
+  },
+  modalItemTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#222"
+  },
+  modalItemSubtitle: {
+    fontSize: 14,
+    color: "#717171"
+  },
+  // Contact Modal Styles
+  contactModalContent: {
+    width: "100%",
+    paddingHorizontal: 20,
+    paddingBottom: 20
+  },
+  contactModalHeader: {
+    alignItems: "center",
+    paddingTop: 8,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F3F4F6"
+  },
+  contactModalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#171717",
+    marginBottom: 4
+  },
+  contactModalSubtitle: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: "center"
+  },
+  contactModalOptions: {
+    paddingTop: 20,
+    paddingBottom: 16
+  },
+  contactOptionHighlighted: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    borderWidth: 1.5,
+    borderColor: "#10B981",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12
+  },
+  contactOptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12
+  },
+  contactOptionIconBg: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#10B981",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  contactOptionContent: {
+    flex: 1,
+    marginLeft: 14
+  },
+  contactOptionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#171717",
+    lineHeight: 22
+  },
+  contactOptionValue: {
+    fontSize: 13,
+    color: "#6B7280",
+    marginTop: 3,
+    lineHeight: 18
+  },
+  contactModalOrgInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    paddingTop: 20,
+    paddingBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#F3F4F6"
+  },
+  contactModalOrgAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#F3F4F6"
+  },
+  contactModalOrgAvatarEmpty: {
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  contactModalOrgDetails: {
+    flex: 1,
+    marginLeft: 12
+  },
+  contactModalOrgName: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#171717",
+    lineHeight: 20
+  },
+  contactModalOrgWebsite: {
+    fontSize: 12,
+    color: theme["color-temporary-primary"],
+    marginTop: 3,
+    lineHeight: 16
+  },
+  contactModalCloseBtn: {
+    marginTop: 20,
+    marginBottom: 8,
+    paddingVertical: 14,
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    borderRadius: 12
+  },
+  contactModalCloseBtnText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#374151"
+  },
+  // Realtor.com Style - Classified Photos (Enhanced - Larger & More Readable)
+  classifiedPhotosSection: {
+    backgroundColor: "#FFF",
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEEEEE"
+  },
+  classifiedPhotosTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#171717",
+    marginBottom: 18,
+    lineHeight: 24
+  },
+  classifiedPhotosGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12
+  },
+  classifiedRoomCard: {
+    width: "48%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1
+  },
+  classifiedRoomCardHeader: {
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  classifiedRoomIconWrapper: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: "#F0F7FF",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  classifiedRoomInfo: {
+    flex: 1,
+    minWidth: 0
+  },
+  classifiedRoomCardLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#171717",
+    lineHeight: 20
+  },
+  classifiedRoomCountText: {
+    fontSize: 12,
+    color: "#171717",
+    marginTop: 3,
+    lineHeight: 16,
+    opacity: 0.7
+  },
+  classifiedRoomCardBadge: {
+    backgroundColor: "#006AFF",
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    minWidth: 22,
+    height: 22,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  classifiedRoomCardBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#FFFFFF"
+  },
+  classifiedPhotosScrollContent: {
+    paddingRight: 0,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 12
+  },
+  classifiedPhotoThumb: {
+    width: 50,
+    height: 50,
+    borderRadius: 6,
+    overflow: "hidden",
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: "#E5E7EB"
+  },
+  classifiedPhotoThumbImage: {
+    width: 50,
+    height: 50,
+    borderRadius: 6
+  }
+});

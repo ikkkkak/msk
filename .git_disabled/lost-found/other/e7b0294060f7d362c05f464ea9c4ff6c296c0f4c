@@ -1,0 +1,742 @@
+import React, { useState, useRef, useEffect } from "react";
+import {
+  View,
+  Image,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Dimensions,
+  ActivityIndicator,
+  Animated,
+  Platform
+} from "react-native";
+import { Text } from "@ui-kitten/components";
+import { useTranslation } from "react-i18next";
+import { callPhoneNumber } from "../../utils/callPhoneNumber";
+import { openURL } from "../../utils/openURL";
+import { ZillowStylePropertyCard } from "../../components/ZillowStylePropertyCard";
+
+/**
+ * Smooth Skeleton Loading Component for Property Sale Cards
+ * Creates professional loading animations similar to Airbnb
+ */
+const PropertySaleSkeletonCard: React.FC<{ delay?: number }> = ({
+  delay = 0
+}) => {
+  const shimmerAnimation = useRef(new Animated.Value(0)).current;
+  // On Android, start with full opacity and scale to avoid fade-in animations
+  const fadeAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0)).current;
+  const scaleAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0.95)).current;
+
+  useEffect(() => {
+    // DISABLE ALL ANIMATIONS ON ANDROID to prevent crashes and improve performance
+    if (Platform.OS === 'android') {
+      // On Android, set final values immediately - no animations, no shimmer
+      fadeAnim.setValue(1);
+      scaleAnim.setValue(1);
+      shimmerAnimation.setValue(0); // No shimmer on Android
+      return;
+    }
+    
+    // iOS: Staggered fade-in animation
+    const fadeInTimer = setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true
+        }),
+        Animated.timing(scaleAnim, {
+          toValue: 1,
+          duration: 400,
+          useNativeDriver: true
+        })
+      ]).start();
+    }, delay);
+
+    // Shimmer animation - iOS only
+    const startShimmer = () => {
+      Animated.sequence([
+        Animated.timing(shimmerAnimation, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true
+        }),
+        Animated.timing(shimmerAnimation, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true
+        })
+      ]).start(() => startShimmer());
+    };
+
+    const shimmerTimer = setTimeout(startShimmer, delay + 200);
+
+    return () => {
+      clearTimeout(fadeInTimer);
+      clearTimeout(shimmerTimer);
+    };
+  }, [delay, fadeAnim, scaleAnim, shimmerAnimation]);
+
+  const shimmerStyle = {
+    opacity: shimmerAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.4, 0.8]
+    })
+  };
+
+  return (
+    <Animated.View
+      style={[
+        styles.skeletonCard,
+        {
+          opacity: fadeAnim,
+          transform: [{ scale: scaleAnim }]
+        }
+      ]}
+    >
+      {/* Image skeleton */}
+      <Animated.View style={[styles.skeletonImage, shimmerStyle]} />
+
+      {/* Content skeleton */}
+      <View style={styles.skeletonContent}>
+        <Animated.View style={[styles.skeletonTitle, shimmerStyle]} />
+        <Animated.View style={[styles.skeletonLocation, shimmerStyle]} />
+        <Animated.View style={[styles.skeletonSpecs, shimmerStyle]} />
+        <Animated.View style={[styles.skeletonPrice, shimmerStyle]} />
+
+        {/* Amenities skeleton */}
+        <View style={styles.skeletonAmenities}>
+          <Animated.View style={[styles.skeletonAmenity, shimmerStyle]} />
+          <Animated.View style={[styles.skeletonAmenity, shimmerStyle]} />
+          <Animated.View style={[styles.skeletonAmenity, shimmerStyle]} />
+        </View>
+      </View>
+    </Animated.View>
+  );
+};
+
+/**
+ * Property Sale Item Interface
+ * Defines the structure of a property sale item with all possible fields
+ */
+interface PropertySaleItem {
+  id: number;
+  title: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  listing_price?: number;
+  images?: string[];
+  organization?: {
+    banner_image?: string;
+    name?: string;
+    phone?: string;
+    website?: string;
+  };
+  bedrooms?: number;
+  bathrooms?: number;
+  square_footage?: number;
+  address?: string;
+  amenities?: string[];
+  property_type?: string;
+  year_built?: number;
+  description?: string;
+  videos?: string[]; // Video URLs array from backend
+  video_url?: string;
+  videoUrl?: string;
+  video?: string;
+}
+
+/**
+ * Property Sale List Component Props
+ */
+interface PropertySaleListProps {
+  /** Array of property sale items to display */
+  items?: PropertySaleItem[] | { items: PropertySaleItem[] };
+  /** Callback when a property is pressed */
+  onPress?: (id: number) => void;
+  /** Callback when call button is pressed */
+  onCall?: (phone?: string) => void;
+  /** Callback when email/website button is pressed */
+  onEmail?: (website?: string) => void;
+  /** Callback when favorite button is pressed */
+  onFavorite?: (id: number) => void;
+  /** Array of favorite property IDs */
+  favorites?: number[];
+  /** Loading state */
+  isLoading?: boolean;
+  /** Error state */
+  error?: string | null;
+  /** Empty state message */
+  emptyMessage?: string;
+}
+
+/**
+ * ULTRA-SIMPLE BULLETPROOF: Property Sale List Component
+ * Minimal rendering with debug logging to diagnose issues
+ */
+function PropertySaleList({
+  items,
+  onPress,
+  onCall,
+  onEmail,
+  onFavorite,
+  favorites = [],
+  isLoading = false,
+  error = null,
+  emptyMessage
+}: PropertySaleListProps) {
+  const { t } = useTranslation();
+
+  // Normalize data
+  let data: PropertySaleItem[] = [];
+  if (Array.isArray(items)) {
+    data = items;
+  } else if (
+    items &&
+    typeof items === "object" &&
+    Array.isArray((items as any).items)
+  ) {
+    data = (items as any).items;
+  }
+
+  console.log(`🔴 PropertySaleList RENDER:`, {
+    dataLength: data.length,
+    isLoading,
+    hasError: !!error,
+    itemsType: typeof items,
+    isArray: Array.isArray(items)
+  });
+
+  // Loading state
+  if (isLoading) {
+    console.log(`⏳ PropertySaleList SHOWING SKELETONS - isLoading is TRUE`);
+    return (
+      <View
+        style={{ width: "100%", paddingVertical: 8, paddingHorizontal: 12 }}
+      >
+        <PropertySaleSkeletonCard delay={0} />
+        <PropertySaleSkeletonCard delay={100} />
+        <PropertySaleSkeletonCard delay={200} />
+      </View>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <View style={{ padding: 20, alignItems: "center" }}>
+        <Text
+          style={{
+            fontSize: 16,
+            fontWeight: "600",
+            color: "#DC2626",
+            marginBottom: 8
+          }}
+        >
+          {t("propertySaleList.errorTitle")}
+        </Text>
+        <Text style={{ fontSize: 14, color: "#6B7280" }}>{error}</Text>
+      </View>
+    );
+  }
+
+  // Empty state
+  if (data.length === 0) {
+    return (
+      <View style={{ padding: 20, alignItems: "center" }}>
+        <Text style={{ fontSize: 48, marginBottom: 16 }}>🏠</Text>
+        <Text
+          style={{
+            fontSize: 16,
+            fontWeight: "600",
+            color: "#1F2937",
+            marginBottom: 8
+          }}
+        >
+          {t("propertySaleList.emptyTitle")}
+        </Text>
+        <Text style={{ fontSize: 14, color: "#6B7280", textAlign: "center" }}>
+          {emptyMessage || t("propertySaleList.emptyMessage")}
+        </Text>
+      </View>
+    );
+  }
+
+  // RENDER ITEMS - DIRECT AND SIMPLE
+  console.log(`🟢 PropertySaleList RENDERING ${data.length} ITEMS`);
+
+  return (
+    <View style={{ width: "100%", paddingHorizontal: 0, paddingVertical: 8 }}>
+      {data.map((property: PropertySaleItem, index: number) => {
+        const propertyId =
+          (property as any)?.id ?? (property as any)?.ID ?? index;
+
+        console.log(
+          `  📍 Item ${index}: id=${propertyId}, title=${
+            (property as any)?.title
+          }`
+        );
+
+        return (
+          <View
+            key={`prop-${propertyId}-${index}`}
+            style={{
+              width: "100%",
+              paddingHorizontal: 12,
+              marginBottom: 8
+            }}
+          >
+            <ZillowStylePropertyCard
+              property={property}
+              onPress={() => {
+                onPress?.(propertyId);
+              }}
+              onCall={onCall}
+              onEmail={onEmail}
+              onFavorite={onFavorite}
+              isFavorite={favorites.includes(propertyId)}
+            />
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
+export default PropertySaleList;
+
+/**
+ * Image Carousel Component Props
+ */
+interface ImageCarouselProps {
+  images: string[];
+  width: number;
+  height?: number;
+}
+
+/**
+ * Image Carousel Component
+ * Displays a horizontal scrollable image carousel with indicators
+ */
+function ImageCarousel({ images, width, height = 220 }: ImageCarouselProps) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [loadingImages, setLoadingImages] = useState<boolean[]>(
+    new Array(images.length).fill(true)
+  );
+  // On Android, start with full opacity to avoid fade-in animations
+  const fadeAnim = useRef(new Animated.Value(Platform.OS === 'android' ? 1 : 0)).current;
+
+  /**
+   * Handle scroll end to update current index
+   */
+  const handleScrollEnd = (event: any) => {
+    const contentOffsetX = event.nativeEvent.contentOffset.x;
+    const newIndex = Math.round(contentOffsetX / width);
+    setCurrentIndex(newIndex);
+  };
+
+  /**
+   * Handle image load with smooth fade-in - DISABLED on Android
+   */
+  const handleImageLoad = (index: number) => {
+    setLoadingImages((prev) => {
+      const newLoading = [...prev];
+      newLoading[index] = false;
+      return newLoading;
+    });
+
+    // Fade in the carousel when first image loads
+    if (index === 0) {
+      if (Platform.OS === 'android') {
+        // Android: Set final value immediately - no animation
+        fadeAnim.setValue(1);
+      } else {
+        // iOS: Smooth fade-in animation
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true
+        }).start();
+      }
+    }
+  };
+
+  if (!images || images.length === 0) {
+    return (
+      <View style={[styles.cover, { width, height }]}>
+        <View style={styles.placeholderContainer}>
+          <Text style={styles.placeholderIcon}>🏠</Text>
+          <Text style={styles.placeholderText}>No Images</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <Animated.View style={[styles.carouselContainer, { opacity: fadeAnim }]}>
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        style={styles.carousel}
+        onMomentumScrollEnd={handleScrollEnd}
+        decelerationRate="fast"
+      >
+        {images.map((imageUrl, index) => (
+          <View
+            key={`carousel-${index}`}
+            style={[styles.imageContainer, { width, height }]}
+          >
+            {loadingImages[index] && (
+              <View style={styles.loadingOverlay}>
+                <ActivityIndicator size="small" color="#666" />
+              </View>
+            )}
+            <Image
+              source={{ uri: imageUrl }}
+              style={[styles.cover, { width, height }]}
+              resizeMode="cover"
+              onLoad={() => handleImageLoad(index)}
+              onError={() => handleImageLoad(index)}
+            />
+          </View>
+        ))}
+      </ScrollView>
+
+      {/* Image indicators */}
+      {images.length > 1 && (
+        <View style={styles.dotsWrap}>
+          {images.map((_, index) => (
+            <View
+              key={`dot-${index}`}
+              style={[styles.dot, index === currentIndex && styles.dotActive]}
+            />
+          ))}
+        </View>
+      )}
+    </Animated.View>
+  );
+}
+
+/**
+ * Professional styling for Property Sale List Component
+ */
+const styles = StyleSheet.create({
+  // Main container styles
+  container: {
+    width: "100%",
+    backgroundColor: "#fff"
+  },
+  list: {
+    paddingVertical: 8,
+    paddingHorizontal: 0
+  },
+
+  // Loading state styles
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 40
+  },
+  loadingText: {
+    fontSize: 16,
+    color: "#666",
+    marginTop: 12,
+    fontWeight: "500"
+  },
+
+  // Error state styles
+  errorContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 40
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#DC2626",
+    marginBottom: 8,
+    textAlign: "center"
+  },
+  errorMessage: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 20
+  },
+
+  // Empty state styles
+  emptyContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    paddingVertical: 60
+  },
+  emptyIcon: {
+    fontSize: 48,
+    marginBottom: 16
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#1F2937",
+    marginBottom: 8,
+    textAlign: "center"
+  },
+  emptyMessage: {
+    fontSize: 14,
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 20,
+    maxWidth: 280
+  },
+
+  // Card styles
+  card: {
+    width: "100%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#EEE",
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2
+  },
+
+  // Image carousel styles
+  carouselContainer: { position: "relative" },
+  carousel: {
+    width: "100%"
+  },
+  imageContainer: { position: "relative" },
+  cover: {
+    backgroundColor: "#F3F4F6"
+  },
+  loadingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 1
+  },
+  placeholderContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6"
+  },
+  placeholderIcon: {
+    fontSize: 32,
+    marginBottom: 8,
+    color: "#9CA3AF"
+  },
+  placeholderText: {
+    fontSize: 14,
+    color: "#9CA3AF",
+    fontWeight: "500"
+  },
+
+  // Image indicators
+  dotsWrap: {
+    position: "absolute",
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "rgba(255, 255, 255, 0.6)",
+    marginHorizontal: 3
+  },
+  dotActive: {
+    backgroundColor: "#FFFFFF",
+    width: 8,
+    height: 8,
+    borderRadius: 4
+  },
+
+  // Content styles
+  imageWrap: {
+    position: "relative"
+  },
+  orgBadge: {
+    position: "absolute",
+    right: 12,
+    bottom: 12,
+    backgroundColor: "#FFFFFF",
+    width: 44,
+    height: 44,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 22,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 1
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  meta: { padding: 12, gap: 6 },
+  titleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start"
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+    lineHeight: 22,
+    flex: 1,
+    marginRight: 6
+  },
+  location: { fontSize: 12, color: "#6B7280", marginTop: 2, lineHeight: 18 },
+  specs: { fontSize: 12, color: "#4B5563", marginTop: 2 },
+  price: { fontSize: 16, fontWeight: "800", color: "#111827", marginTop: 4 },
+
+  // Amenities styles
+  amenitiesRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 6,
+    gap: 6
+  },
+  amenityChip: {
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#E5E7EB"
+  },
+  amenityText: { fontSize: 11, color: "#374151", fontWeight: "500" },
+  amenityMore: {
+    backgroundColor: "#E5E7EB"
+  },
+  amenityMoreText: {
+    color: "#111827",
+    fontWeight: "600"
+  },
+
+  // Organization styles
+  orgName: { marginTop: 6, fontSize: 12, color: "#4B5563", fontWeight: "600" },
+
+  // Action button styles
+  callActionButton: {
+    backgroundColor: "#111827",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginTop: 8
+  },
+  callActionButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center"
+  },
+  callActionButtonOutline: {
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: "#111827",
+    marginTop: 8
+  },
+  callActionButtonTextOutline: {
+    color: "#111827",
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center"
+  },
+
+  // Skeleton Loading Styles
+  skeletonCard: {
+    width: "100%",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: {
+      width: 0,
+      height: 2
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3
+  },
+  skeletonImage: {
+    width: "100%",
+    height: 220,
+    backgroundColor: "#E5E7EB"
+  },
+  skeletonContent: {
+    padding: 16,
+    gap: 8
+  },
+  skeletonTitle: {
+    height: 20,
+    backgroundColor: "#D1D5DB",
+    borderRadius: 8,
+    width: "85%"
+  },
+  skeletonLocation: {
+    height: 16,
+    backgroundColor: "#D1D5DB",
+    borderRadius: 6,
+    width: "70%"
+  },
+  skeletonSpecs: {
+    height: 14,
+    backgroundColor: "#D1D5DB",
+    borderRadius: 6,
+    width: "60%"
+  },
+  skeletonPrice: {
+    height: 24,
+    backgroundColor: "#D1D5DB",
+    borderRadius: 8,
+    width: "50%",
+    marginTop: 4
+  },
+  skeletonAmenities: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: 8,
+    gap: 6
+  },
+  skeletonAmenity: {
+    height: 24,
+    backgroundColor: "#D1D5DB",
+    borderRadius: 12,
+    width: 60
+  }
+});

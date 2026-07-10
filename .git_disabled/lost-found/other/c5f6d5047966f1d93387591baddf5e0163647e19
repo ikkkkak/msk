@@ -1,0 +1,1402 @@
+import React, { useState, useRef, useCallback, useEffect } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  Modal,
+  ActivityIndicator,
+  TextInput,
+  Dimensions,
+  Platform,
+  StatusBar,
+  Alert,
+  FlatList,
+  ScrollView,
+  SafeAreaView
+} from "react-native";
+import { CameraView, CameraType, useCameraPermissions } from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
+import { Video, ResizeMode } from "expo-av";
+import * as Haptics from "expo-haptics";
+import axios from "axios";
+import { endpoints } from "../constants";
+import { useUser } from "../hooks/useUser";
+import * as FileSystem from "expo-file-system/legacy";
+import * as VideoThumbnails from "expo-video-thumbnails";
+import * as MediaLibrary from "expo-media-library";
+import {
+  Camera as CameraIcon,
+  Images,
+  X,
+  ArrowLeft,
+  Play,
+  Upload,
+  ArrowRight,
+  Trash,
+  FlipHorizontal,
+  ImageSquare,
+  Warning
+} from "phosphor-react-native";
+import { useTranslation } from "react-i18next";
+import { LinearGradient } from "expo-linear-gradient";
+
+const { width, height } = Dimensions.get("window");
+const GALLERY_COLUMNS = 3;
+const GALLERY_SPACING = 4;
+const GALLERY_SIDE_MARGIN = 12;
+const THUMB_SIZE =
+  (width - GALLERY_SIDE_MARGIN * 2 - (GALLERY_COLUMNS - 1) * GALLERY_SPACING) /
+  GALLERY_COLUMNS;
+const MAX_SELECTIONS = 10;
+
+// Modern color palette
+const COLORS = {
+  primary: "#FF385C",
+  primaryDark: "#E31C5F",
+  text: "#222222",
+  textSecondary: "#717171",
+  textLight: "#B0B0B0",
+  white: "#FFFFFF",
+  background: "#FAFAFA",
+  surface: "#FFFFFF",
+  border: "#EBEBEB",
+  success: "#00A699",
+  error: "#FF5A5F",
+  overlay: "rgba(0,0,0,0.6)"
+};
+
+const MIME_MAP: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  heic: "image/heic",
+  heif: "image/heif",
+  gif: "image/gif",
+  webp: "image/webp",
+  mov: "video/quicktime",
+  mp4: "video/mp4",
+  m4v: "video/x-m4v"
+};
+
+const getMimeType = (
+  filename?: string | null,
+  fallback: "image" | "video" = "image"
+): string => {
+  if (filename) {
+    const ext = filename.split(".").pop()?.toLowerCase();
+    if (ext && MIME_MAP[ext]) return MIME_MAP[ext];
+  }
+  return fallback === "video" ? "video/mp4" : "image/jpeg";
+};
+
+interface MediaAsset {
+  uri: string;
+  type: "image" | "video";
+  mimeType?: string | null;
+  filename?: string;
+  id?: string;
+  displayUri?: string; // Cached file:// URI for display
+}
+
+interface AddStoryModalProps {
+  visible: boolean;
+  onClose: () => void;
+  onUploaded?: () => void;
+}
+
+type ScreenMode = "camera" | "gallery" | "preview";
+
+export const AddStoryModal: React.FC<AddStoryModalProps> = ({
+  visible,
+  onClose,
+  onUploaded
+}) => {
+  const [mode, setMode] = useState<ScreenMode>("gallery");
+  const [selectedAssets, setSelectedAssets] = useState<MediaAsset[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [caption, setCaption] = useState("");
+  const { user } = useUser();
+  const [galleryAssets, setGalleryAssets] = useState<MediaLibrary.Asset[]>([]);
+  const [galleryLoading, setGalleryLoading] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<CameraType>("back");
+  const [isTakingPhoto, setIsTakingPhoto] = useState(false);
+  const cameraRef = useRef<CameraView>(null);
+  const { t } = useTranslation();
+  const uriCacheRef = useRef<Map<string, string>>(new Map()); // Cache ph:// to file:// conversions
+
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [mediaLibraryPermission, setMediaLibraryPermission] = useState<
+    boolean | null
+  >(null);
+
+  // Initialize on open
+  useEffect(() => {
+    if (visible) {
+      setCaption("");
+      setSelectedAssets([]);
+      setMode("gallery");
+      setUploadProgress(0);
+      uriCacheRef.current.clear(); // Clear cache when modal opens
+      loadGalleryAssets();
+    } else {
+      // Clean up when modal closes
+      setSelectedAssets([]);
+      uriCacheRef.current.clear();
+    }
+  }, [visible]);
+
+  const loadGalleryAssets = useCallback(async () => {
+    setGalleryLoading(true);
+    try {
+      let permission = await MediaLibrary.getPermissionsAsync();
+      if (!permission.granted) {
+        permission = await MediaLibrary.requestPermissionsAsync();
+      }
+
+      setMediaLibraryPermission(permission.granted);
+
+      if (!permission.granted) {
+        setGalleryAssets([]);
+        return;
+      }
+
+      // Clear cache when reloading
+      uriCacheRef.current.clear();
+
+      const result = await MediaLibrary.getAssetsAsync({
+        first: 100,
+        sortBy: [MediaLibrary.SortBy.modificationTime],
+        mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video]
+      });
+
+      // Filter out invalid assets and ensure we have valid URIs
+      const validAssets = (result.assets ?? []).filter((asset) => {
+        return (
+          asset &&
+          asset.uri &&
+          (asset.uri.startsWith("ph://") ||
+            asset.uri.startsWith("file://") ||
+            asset.uri.startsWith("content://"))
+        );
+      });
+
+      setGalleryAssets(validAssets);
+    } catch (err) {
+      console.warn("[AddStoryModal] Gallery load error:", err);
+      setGalleryAssets([]);
+    } finally {
+      setGalleryLoading(false);
+    }
+  }, []);
+
+  const handleTakePicture = async () => {
+    if (!cameraRef.current || isTakingPhoto) return;
+
+    try {
+      setIsTakingPhoto(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.9,
+        skipProcessing: Platform.OS === "android"
+      });
+
+      if (photo?.uri) {
+        setSelectedAssets([
+          {
+            uri: photo.uri,
+            type: "image",
+            mimeType: "image/jpeg"
+          }
+        ]);
+        setMode("preview");
+      }
+    } catch (error) {
+      console.warn("[AddStoryModal] Camera error:", error);
+      Alert.alert(
+        t("common.error", "Error"),
+        t("addStory.cameraError", "Failed to take photo")
+      );
+    } finally {
+      setIsTakingPhoto(false);
+    }
+  };
+
+  const handlePickFromGallery = async () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.All,
+        allowsMultipleSelection: true,
+        selectionLimit: MAX_SELECTIONS,
+        quality: 0.9
+      });
+
+      if (!result.canceled && result.assets.length > 0) {
+        const selected: MediaAsset[] = result.assets.map((asset) => ({
+          uri: asset.uri,
+          type: asset.type === "video" ? "video" : "image",
+          mimeType:
+            asset.mimeType ||
+            getMimeType(
+              asset.fileName,
+              asset.type === "video" ? "video" : "image"
+            ),
+          filename: asset.fileName ?? undefined
+        }));
+        setSelectedAssets(selected);
+        setMode("preview");
+      }
+    } catch (e) {
+      console.warn("[AddStoryModal] Picker error:", e);
+    }
+  };
+
+  // Convert ph:// URIs to file:// URIs for display and upload
+  const ensureLocalUri = useCallback(
+    async (
+      uri: string,
+      type: "image" | "video" = "image",
+      assetId?: string
+    ): Promise<string> => {
+      if (!uri) throw new Error("Invalid URI");
+
+      // Check cache first
+      if (uriCacheRef.current.has(uri)) {
+        return uriCacheRef.current.get(uri)!;
+      }
+
+      // If already file:// or content://, return as-is (content:// works on Android)
+      if (uri.startsWith("file://") || uri.startsWith("content://")) {
+        uriCacheRef.current.set(uri, uri);
+        return uri;
+      }
+
+      // Handle ph:// URIs (Photo Library) - use assetId if provided, otherwise parse from URI
+      if (uri.startsWith("ph://") || assetId) {
+        try {
+          const idToUse = assetId || uri.replace("ph://", "");
+
+          // Get asset info using the ID
+          const assetInfo = await MediaLibrary.getAssetInfoAsync(idToUse);
+
+          // Use localUri if available (iOS/Android file path) - this is the actual file path
+          if (assetInfo?.localUri) {
+            uriCacheRef.current.set(uri, assetInfo.localUri);
+            return assetInfo.localUri;
+          }
+
+          // Fallback: Try to use the URI from assetInfo (might be content:// on Android)
+          if (assetInfo?.uri && assetInfo.uri !== uri) {
+            // If it's a usable URI, use it
+            if (
+              assetInfo.uri.startsWith("file://") ||
+              assetInfo.uri.startsWith("content://")
+            ) {
+              uriCacheRef.current.set(uri, assetInfo.uri);
+              return assetInfo.uri;
+            }
+
+            // Otherwise copy to cache
+            const ext = type === "video" ? "mp4" : "jpg";
+            const cacheDir =
+              FileSystem.cacheDirectory || FileSystem.documentDirectory || "";
+            const dest = `${cacheDir}story-${Date.now()}-${Math.random()
+              .toString(36)
+              .substr(2, 9)}.${ext}`;
+
+            try {
+              await FileSystem.copyAsync({ from: assetInfo.uri, to: dest });
+              uriCacheRef.current.set(uri, dest);
+              return dest;
+            } catch (copyError) {
+              console.warn("[AddStoryModal] Error copying asset:", copyError);
+            }
+          }
+        } catch (error) {
+          console.warn("[AddStoryModal] Error converting ph:// URI:", error);
+          // Will fall through to last resort copy attempt
+        }
+      }
+
+      // Try direct file system check
+      try {
+        const info = await FileSystem.getInfoAsync(uri);
+        if (info.exists) {
+          uriCacheRef.current.set(uri, uri);
+          return uri;
+        }
+      } catch {}
+
+      // Last resort: copy to cache
+      const ext = type === "video" ? "mp4" : "jpg";
+      const cacheDir =
+        FileSystem.cacheDirectory || FileSystem.documentDirectory || "";
+      const dest = `${cacheDir}story-${Date.now()}-${Math.random()
+        .toString(36)
+        .substr(2, 9)}.${ext}`;
+
+      try {
+        await FileSystem.copyAsync({ from: uri, to: dest });
+        uriCacheRef.current.set(uri, dest);
+        return dest;
+      } catch (error) {
+        console.warn("[AddStoryModal] Error copying file:", error);
+        throw new Error(`Failed to process URI: ${uri}`);
+      }
+    },
+    []
+  ); // Empty deps - uses refs which are stable
+
+  const toggleAssetSelection = useCallback(
+    async (asset: MediaLibrary.Asset) => {
+      const isSelected = selectedAssets.some(
+        (a) => a.id === asset.id || a.uri === asset.uri
+      );
+
+      if (isSelected) {
+        setSelectedAssets((prev) =>
+          prev.filter((a) => a.id !== asset.id && a.uri !== asset.uri)
+        );
+      } else {
+        if (selectedAssets.length >= MAX_SELECTIONS) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          Alert.alert(
+            t("addStory.limitTitle", "Selection Limit"),
+            t(
+              "addStory.limitMessage",
+              `You can select up to ${MAX_SELECTIONS} items`
+            )
+          );
+          return;
+        }
+
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+        // Convert ph:// URI to file:// URI for display
+        let displayUri = asset.uri;
+        const assetType =
+          asset.mediaType === MediaLibrary.MediaType.video ? "video" : "image";
+        try {
+          displayUri = await ensureLocalUri(asset.uri, assetType, asset.id);
+        } catch (error) {
+          console.warn(
+            "[AddStoryModal] Error converting URI for display:",
+            error
+          );
+          // Continue with original URI, upload will handle conversion
+        }
+
+        const newAsset: MediaAsset = {
+          uri: asset.uri, // Keep original URI for upload
+          displayUri, // Use converted URI for display
+          type:
+            asset.mediaType === MediaLibrary.MediaType.video
+              ? "video"
+              : "image",
+          mimeType: getMimeType(
+            asset.filename,
+            asset.mediaType === MediaLibrary.MediaType.video ? "video" : "image"
+          ),
+          filename: asset.filename,
+          id: asset.id
+        };
+
+        setSelectedAssets((prev) => [...prev, newAsset]);
+      }
+    },
+    [selectedAssets, t, ensureLocalUri]
+  );
+
+  const uploadSingleAsset = async (
+    asset: MediaAsset,
+    index: number
+  ): Promise<void> => {
+    const token = user?.accessToken;
+    if (!token) throw new Error("Not authenticated");
+
+    const mime = asset.mimeType || getMimeType(asset.filename, asset.type);
+    const localUri = await ensureLocalUri(asset.uri, asset.type, asset.id);
+    const base64 = await FileSystem.readAsStringAsync(localUri, {
+      encoding: "base64"
+    });
+    const mediaBase64 = `data:${mime};base64,${base64}`;
+
+    let thumbBase64: string | undefined;
+    if (asset.type === "video") {
+      try {
+        // Use the displayUri or converted URI for thumbnail generation
+        const videoUri = asset.displayUri || localUri;
+        const thumb = await VideoThumbnails.getThumbnailAsync(videoUri, {
+          time: 500,
+          quality: 0.8
+        });
+        if (thumb?.uri) {
+          const thumbUri = await ensureLocalUri(thumb.uri, "image");
+          const tb64 = await FileSystem.readAsStringAsync(thumbUri, {
+            encoding: "base64"
+          });
+          thumbBase64 = `data:image/jpeg;base64,${tb64}`;
+        }
+      } catch (error) {
+        console.warn(
+          "[AddStoryModal] Video thumbnail generation failed:",
+          error
+        );
+        // Continue without thumbnail - server can generate one
+      }
+    }
+
+    await axios.post(
+      `${endpoints.baseURL}/stories/upload`,
+      {
+        type: asset.type,
+        media_base64: mediaBase64,
+        thumbnail_base64:
+          thumbBase64 || (asset.type === "image" ? mediaBase64 : undefined),
+        mime,
+        caption: index === 0 ? caption : "", // Only first item gets caption
+        duration_seconds: asset.type === "video" ? 15 : 5
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 60000
+      }
+    );
+
+    setUploadProgress(((index + 1) / selectedAssets.length) * 100);
+  };
+
+  const handleUpload = async () => {
+    if (selectedAssets.length === 0 || uploading) return;
+
+    try {
+      setUploading(true);
+      setUploadProgress(0);
+
+      for (let i = 0; i < selectedAssets.length; i++) {
+        await uploadSingleAsset(selectedAssets[i], i);
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      Alert.alert(
+        t("addStory.successTitle", "Success!"),
+        t("addStory.successMessage", "Your story has been shared")
+      );
+      onUploaded?.();
+      onClose();
+    } catch (e: any) {
+      console.warn("[AddStoryModal] Upload error:", e);
+      Alert.alert(
+        t("addStory.errorTitle", "Upload Failed"),
+        e?.response?.data?.message ||
+          t("addStory.errorMessage", "Please try again")
+      );
+    } finally {
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const removeAsset = (asset: MediaAsset) => {
+    const updated = selectedAssets.filter((a) => a.uri !== asset.uri);
+    setSelectedAssets(updated);
+    if (updated.length === 0) {
+      setMode("gallery");
+    }
+  };
+
+  const flipCamera = () => {
+    setCameraFacing((prev) => (prev === "back" ? "front" : "back"));
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  // ============ GALLERY ITEM COMPONENT ============
+  const GalleryItem: React.FC<{
+    item: MediaLibrary.Asset;
+    isSelected: boolean;
+    selectionIndex: number;
+    onToggle: () => void;
+    ensureLocalUri: (
+      uri: string,
+      type: "image" | "video",
+      assetId?: string
+    ) => Promise<string>;
+  }> = ({ item, isSelected, selectionIndex, onToggle, ensureLocalUri }) => {
+    const isVideo = item.mediaType === MediaLibrary.MediaType.video;
+    const [displayUri, setDisplayUri] = useState<string>(item.uri);
+    const [imageError, setImageError] = useState(false);
+    const [isLoading, setIsLoading] = useState(item.uri.startsWith("ph://"));
+
+    // Convert ph:// URI to file:// URI for display
+    useEffect(() => {
+      if (item.uri.startsWith("ph://") || item.uri.startsWith("content://")) {
+        setIsLoading(true);
+        ensureLocalUri(item.uri, isVideo ? "video" : "image", item.id)
+          .then((convertedUri) => {
+            setDisplayUri(convertedUri);
+            setIsLoading(false);
+          })
+          .catch((error) => {
+            console.warn(
+              "[AddStoryModal] Error converting gallery item URI:",
+              error
+            );
+            setImageError(true);
+            setIsLoading(false);
+          });
+      } else {
+        // For file:// URIs, use directly
+        setDisplayUri(item.uri);
+        setIsLoading(false);
+      }
+    }, [item.uri, item.id, isVideo, ensureLocalUri]);
+
+    return (
+      <TouchableOpacity
+        style={[styles.galleryItem, isSelected && styles.galleryItemSelected]}
+        activeOpacity={0.8}
+        onPress={onToggle}
+      >
+        {isLoading ? (
+          <View style={[styles.galleryImage, styles.galleryImageLoading]}>
+            <ActivityIndicator size="small" color={COLORS.primary} />
+          </View>
+        ) : !imageError ? (
+          <Image
+            source={{ uri: displayUri }}
+            style={styles.galleryImage}
+            onError={() => {
+              console.warn("[AddStoryModal] Image load error");
+              setImageError(true);
+            }}
+          />
+        ) : (
+          <View style={[styles.galleryImage, styles.galleryImageError]}>
+            <ImageSquare size={24} color={COLORS.textSecondary} />
+          </View>
+        )}
+
+        {isVideo && !imageError && !isLoading && (
+          <View style={styles.videoIndicator}>
+            <Play size={12} color={COLORS.white} weight="fill" />
+          </View>
+        )}
+
+        <View
+          style={[
+            styles.selectionCircle,
+            isSelected && styles.selectionCircleActive
+          ]}
+        >
+          {isSelected && (
+            <Text style={styles.selectionNumber}>{selectionIndex + 1}</Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderGalleryItem = useCallback(
+    ({ item }: { item: MediaLibrary.Asset }) => {
+      const isSelected = selectedAssets.some(
+        (a) => a.id === item.id || a.uri === item.uri
+      );
+      const selectionIndex = selectedAssets.findIndex(
+        (a) => a.id === item.id || a.uri === item.uri
+      );
+
+      return (
+        <GalleryItem
+          item={item}
+          isSelected={isSelected}
+          selectionIndex={selectionIndex}
+          onToggle={() => toggleAssetSelection(item)}
+          ensureLocalUri={ensureLocalUri}
+        />
+      );
+    },
+    [selectedAssets, toggleAssetSelection]
+  );
+
+  // ============ CAMERA VIEW ============
+  const CameraScreen = () => {
+    if (!cameraPermission?.granted) {
+      return (
+        <View style={styles.permissionContainer}>
+          <CameraIcon size={64} color={COLORS.textSecondary} weight="thin" />
+          <Text style={styles.permissionTitle}>
+            {t("addStory.cameraPermission", "Camera Access")}
+          </Text>
+          <Text style={styles.permissionText}>
+            {t(
+              "addStory.cameraPermissionText",
+              "Allow camera access to take photos for your story"
+            )}
+          </Text>
+          <TouchableOpacity
+            style={styles.permissionButton}
+            onPress={requestCameraPermission}
+          >
+            <Text style={styles.permissionButtonText}>
+              {t("common.allow", "Allow Access")}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => setMode("gallery")}
+          >
+            <Text style={styles.secondaryButtonText}>
+              {t("addStory.useGallery", "Use Gallery Instead")}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.cameraContainer}>
+        <CameraView ref={cameraRef} style={styles.camera} facing={cameraFacing}>
+          {/* Header */}
+          <SafeAreaView style={styles.cameraHeader}>
+            <TouchableOpacity onPress={onClose} style={styles.cameraButton}>
+              <X size={26} color={COLORS.white} weight="bold" />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={flipCamera} style={styles.cameraButton}>
+              <FlipHorizontal size={24} color={COLORS.white} weight="bold" />
+            </TouchableOpacity>
+          </SafeAreaView>
+
+          {/* Footer */}
+          <View style={styles.cameraFooter}>
+            <TouchableOpacity
+              style={[
+                styles.captureButton,
+                isTakingPhoto && styles.captureButtonActive
+              ]}
+              onPress={handleTakePicture}
+              disabled={isTakingPhoto}
+            >
+              {isTakingPhoto && <ActivityIndicator color={COLORS.primary} />}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.gallerySwitchButton}
+              onPress={() => setMode("gallery")}
+            >
+              <Images size={22} color={COLORS.text} weight="bold" />
+              <Text style={styles.gallerySwitchText}>
+                {t("addStory.gallery", "Gallery")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </CameraView>
+      </View>
+    );
+  };
+
+  // ============ GALLERY VIEW ============
+  const GalleryScreen = () => (
+    <View style={styles.screenContainer}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={onClose} style={styles.headerButton}>
+          <X size={24} color={COLORS.text} weight="bold" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>
+          {t("addStory.newStory", "New Story")}
+        </Text>
+        <TouchableOpacity
+          onPress={() => setMode("camera")}
+          style={styles.headerButton}
+        >
+          <CameraIcon size={24} color={COLORS.text} weight="bold" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Selection info */}
+      {selectedAssets.length > 0 && (
+        <View style={styles.selectionBar}>
+          <Text style={styles.selectionText}>
+            {selectedAssets.length} {t("addStory.selected", "selected")}
+          </Text>
+          <TouchableOpacity onPress={() => setSelectedAssets([])}>
+            <Text style={styles.clearText}>{t("common.clear", "Clear")}</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Gallery Grid */}
+      <View style={styles.galleryContainer}>
+        {galleryLoading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color={COLORS.primary} />
+            <Text style={styles.loadingText}>
+              {t("addStory.loading", "Loading...")}
+            </Text>
+          </View>
+        ) : mediaLibraryPermission === false ? (
+          <View style={styles.permissionContainer}>
+            <ImageSquare size={64} color={COLORS.textSecondary} weight="thin" />
+            <Text style={styles.permissionTitle}>
+              {t("addStory.galleryPermission", "Gallery Access")}
+            </Text>
+            <Text style={styles.permissionText}>
+              {t(
+                "addStory.galleryPermissionText",
+                "Allow access to select photos and videos"
+              )}
+            </Text>
+            <TouchableOpacity
+              style={styles.permissionButton}
+              onPress={loadGalleryAssets}
+            >
+              <Text style={styles.permissionButtonText}>
+                {t("common.allow", "Allow Access")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : galleryAssets.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Images size={64} color={COLORS.textSecondary} weight="thin" />
+            <Text style={styles.emptyTitle}>
+              {t("addStory.noMedia", "No Media")}
+            </Text>
+            <Text style={styles.emptyText}>
+              {t("addStory.noMediaText", "Take a photo to get started")}
+            </Text>
+            <TouchableOpacity
+              style={styles.permissionButton}
+              onPress={() => setMode("camera")}
+            >
+              <Text style={styles.permissionButtonText}>
+                {t("addStory.takePhoto", "Take Photo")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <FlatList
+            data={galleryAssets}
+            keyExtractor={(item) => item.id}
+            numColumns={GALLERY_COLUMNS}
+            renderItem={renderGalleryItem}
+            contentContainerStyle={styles.galleryGrid}
+            showsVerticalScrollIndicator={false}
+            removeClippedSubviews
+            initialNumToRender={21}
+            maxToRenderPerBatch={21}
+            windowSize={7}
+          />
+        )}
+      </View>
+
+      {/* Bottom Action */}
+      {selectedAssets.length > 0 && (
+        <View style={styles.bottomAction}>
+          <TouchableOpacity
+            style={styles.continueButton}
+            onPress={() => setMode("preview")}
+          >
+            <Text style={styles.continueButtonText}>
+              {t("common.continue", "Continue")} ({selectedAssets.length})
+            </Text>
+            <ArrowRight size={20} color={COLORS.white} weight="bold" />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Quick Pick Button */}
+      <TouchableOpacity
+        style={styles.floatingButton}
+        onPress={handlePickFromGallery}
+      >
+        <Images size={22} color={COLORS.white} weight="bold" />
+      </TouchableOpacity>
+    </View>
+  );
+
+  // ============ PREVIEW VIEW ============
+  const PreviewScreen = () => (
+    <View style={styles.screenContainer}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          onPress={() => setMode("gallery")}
+          style={styles.headerButton}
+          disabled={uploading}
+        >
+          <ArrowLeft size={24} color={COLORS.text} weight="bold" />
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerTitle}>
+            {t("addStory.preview", "Preview")}
+          </Text>
+          <Text style={styles.headerSubtitle}>
+            {selectedAssets.length}{" "}
+            {selectedAssets.length === 1 ? "item" : "items"}
+          </Text>
+        </View>
+        <TouchableOpacity
+          onPress={handleUpload}
+          style={[styles.shareButton, uploading && styles.shareButtonDisabled]}
+          disabled={uploading}
+        >
+          {uploading ? (
+            <ActivityIndicator size="small" color={COLORS.white} />
+          ) : (
+            <>
+              <Upload size={18} color={COLORS.white} weight="bold" />
+              <Text style={styles.shareButtonText}>
+                {t("addStory.share", "Share")}
+              </Text>
+            </>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* Progress */}
+      {uploading && (
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBar}>
+            <View
+              style={[styles.progressFill, { width: `${uploadProgress}%` }]}
+            />
+          </View>
+          <Text style={styles.progressText}>
+            {t("addStory.uploading", "Uploading")} {Math.round(uploadProgress)}%
+          </Text>
+        </View>
+      )}
+
+      {/* Content */}
+      <ScrollView
+        style={styles.previewScroll}
+        contentContainerStyle={styles.previewContent}
+      >
+        {selectedAssets.map((asset, idx) => {
+          // Use displayUri if available, otherwise use original URI
+          const previewUri = asset.displayUri || asset.uri;
+
+          return (
+            <View key={asset.uri || asset.id || idx} style={styles.previewItem}>
+              <View style={styles.previewCard}>
+                {asset.type === "video" ? (
+                  <Video
+                    source={{ uri: previewUri }}
+                    style={styles.previewMedia}
+                    resizeMode={ResizeMode.COVER}
+                    shouldPlay={false}
+                    isMuted
+                    onError={(error) => {
+                      console.warn(
+                        "[AddStoryModal] Video preview error:",
+                        error
+                      );
+                    }}
+                  />
+                ) : (
+                  <Image
+                    source={{ uri: previewUri }}
+                    style={styles.previewMedia}
+                    onError={(error) => {
+                      console.warn(
+                        "[AddStoryModal] Image preview error:",
+                        error
+                      );
+                    }}
+                  />
+                )}
+
+                {asset.type === "video" && (
+                  <View style={styles.previewPlayIcon}>
+                    <Play size={32} color={COLORS.white} weight="fill" />
+                  </View>
+                )}
+              </View>
+
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => removeAsset(asset)}
+                disabled={uploading}
+              >
+                <Trash size={16} color={COLORS.white} weight="bold" />
+              </TouchableOpacity>
+            </View>
+          );
+        })}
+
+        {/* Caption */}
+        <View style={styles.captionContainer}>
+          <Text style={styles.captionLabel}>
+            {t("addStory.caption", "Caption")} (
+            {t("common.optional", "optional")})
+          </Text>
+          <TextInput
+            value={caption}
+            onChangeText={setCaption}
+            placeholder={t("addStory.captionPlaceholder", "What's happening?")}
+            placeholderTextColor={COLORS.textLight}
+            style={styles.captionInput}
+            maxLength={150}
+            editable={!uploading}
+            multiline
+          />
+          <Text style={styles.charCount}>{caption.length}/150</Text>
+        </View>
+      </ScrollView>
+    </View>
+  );
+
+  if (!visible) return null;
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      presentationStyle="fullScreen"
+      onRequestClose={onClose}
+    >
+      <StatusBar barStyle="dark-content" backgroundColor={COLORS.background} />
+      <SafeAreaView style={styles.root}>
+        {mode === "camera" ? (
+          <CameraScreen />
+        ) : mode === "preview" ? (
+          <PreviewScreen />
+        ) : (
+          <GalleryScreen />
+        )}
+      </SafeAreaView>
+    </Modal>
+  );
+};
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: COLORS.background
+  },
+  screenContainer: {
+    flex: 1,
+    backgroundColor: COLORS.background
+  },
+
+  // Header
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === "ios" ? 8 : 16,
+    paddingBottom: 12,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border
+  },
+  headerButton: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.text
+  },
+  headerCenter: {
+    alignItems: "center"
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    marginTop: 2
+  },
+
+  // Selection Bar
+  selectionBar: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: COLORS.surface
+  },
+  selectionText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.text
+  },
+  clearText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: COLORS.primary
+  },
+
+  // Gallery
+  galleryContainer: {
+    flex: 1
+  },
+  galleryGrid: {
+    padding: GALLERY_SIDE_MARGIN
+  },
+  galleryItem: {
+    width: THUMB_SIZE,
+    height: THUMB_SIZE,
+    marginRight: GALLERY_SPACING,
+    marginBottom: GALLERY_SPACING,
+    borderRadius: 8,
+    overflow: "hidden",
+    backgroundColor: COLORS.border
+  },
+  galleryItemSelected: {
+    borderWidth: 3,
+    borderColor: COLORS.primary
+  },
+  galleryImage: {
+    width: "100%",
+    height: "100%"
+  },
+  galleryImageError: {
+    backgroundColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  galleryImageLoading: {
+    backgroundColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  videoIndicator: {
+    position: "absolute",
+    bottom: 6,
+    left: 6,
+    backgroundColor: COLORS.overlay,
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  selectionCircle: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: COLORS.white,
+    backgroundColor: "rgba(255,255,255,0.3)",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  selectionCircleActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary
+  },
+  selectionNumber: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: "800"
+  },
+
+  // Loading & Empty States
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 12
+  },
+  loadingText: {
+    fontSize: 14,
+    color: COLORS.textSecondary
+  },
+  permissionContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 32,
+    gap: 12
+  },
+  permissionTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: COLORS.text,
+    marginTop: 8
+  },
+  permissionText: {
+    fontSize: 15,
+    color: COLORS.textSecondary,
+    textAlign: "center",
+    lineHeight: 22
+  },
+  permissionButton: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 10,
+    marginTop: 16
+  },
+  permissionButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "700"
+  },
+  secondaryButton: {
+    paddingVertical: 12,
+    marginTop: 8
+  },
+  secondaryButtonText: {
+    color: COLORS.textSecondary,
+    fontSize: 15,
+    fontWeight: "600"
+  },
+  emptyContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 32,
+    gap: 8
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: COLORS.text,
+    marginTop: 12
+  },
+  emptyText: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    textAlign: "center"
+  },
+
+  // Bottom Action
+  bottomAction: {
+    padding: 16,
+    backgroundColor: COLORS.surface,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border
+  },
+  continueButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 8
+  },
+  continueButtonText: {
+    color: COLORS.white,
+    fontSize: 16,
+    fontWeight: "700"
+  },
+  floatingButton: {
+    position: "absolute",
+    bottom: 100,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: COLORS.text,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6
+  },
+
+  // Camera
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: "#000"
+  },
+  camera: {
+    flex: 1
+  },
+  cameraHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === "ios" ? 12 : 24
+  },
+  cameraButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.overlay,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  cameraFooter: {
+    position: "absolute",
+    bottom: Platform.OS === "ios" ? 40 : 24,
+    left: 0,
+    right: 0,
+    alignItems: "center"
+  },
+  captureButton: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: COLORS.white,
+    borderWidth: 6,
+    borderColor: COLORS.primary,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  captureButtonActive: {
+    opacity: 0.7
+  },
+  gallerySwitchButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.white,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginTop: 16,
+    gap: 6
+  },
+  gallerySwitchText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: COLORS.text
+  },
+
+  // Share Button
+  shareButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    gap: 6
+  },
+  shareButtonDisabled: {
+    opacity: 0.7
+  },
+  shareButtonText: {
+    color: COLORS.white,
+    fontSize: 15,
+    fontWeight: "700"
+  },
+
+  // Progress
+  progressContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: COLORS.surface
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: COLORS.border,
+    borderRadius: 2,
+    overflow: "hidden"
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: COLORS.primary
+  },
+  progressText: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    textAlign: "center",
+    marginTop: 8,
+    fontWeight: "600"
+  },
+
+  // Preview
+  previewScroll: {
+    flex: 1
+  },
+  previewContent: {
+    padding: 16
+  },
+  previewItem: {
+    marginBottom: 16,
+    position: "relative"
+  },
+  previewCard: {
+    width: "100%",
+    aspectRatio: 1,
+    borderRadius: 16,
+    overflow: "hidden",
+    backgroundColor: COLORS.border
+  },
+  previewMedia: {
+    width: "100%",
+    height: "100%"
+  },
+  previewPlayIcon: {
+    position: "absolute",
+    top: "50%",
+    left: "50%",
+    marginTop: -24,
+    marginLeft: -24,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: COLORS.overlay,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  removeButton: {
+    position: "absolute",
+    top: -8,
+    right: -8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.error,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 3,
+    borderColor: COLORS.white,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4
+  },
+
+  // Caption
+  captionContainer: {
+    marginTop: 8
+  },
+  captionLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: COLORS.text,
+    marginBottom: 10
+  },
+  captionInput: {
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 15,
+    color: COLORS.text,
+    minHeight: 80,
+    textAlignVertical: "top"
+  },
+  charCount: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    textAlign: "right",
+    marginTop: 6
+  }
+});
+
+export default AddStoryModal;

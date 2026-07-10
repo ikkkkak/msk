@@ -1,0 +1,21 @@
+/** Host dashboard tokens — restrained, Zillow-grade listing management UI. */
+export const mp = {
+  page: "#F5F6F8",
+  surface: "#FFFFFF",
+  border: "#DDE1E6",
+  borderLight: "#E8EAED",
+  ink: "#2A2A33",
+  inkSecondary: "#596B82",
+  inkMuted: "#8B95A5",
+  accent: "#006AFF",
+  accentSoft: "#E8F2FF",
+  live: "#0D7A4E",
+  liveBg: "#E6F4EE",
+  pending: "#9A6700",
+  pendingBg: "#FFF8E6",
+  rejected: "#C13515",
+  rejectedBg: "#FDECEA",
+  shadow: "rgba(42, 42, 51, 0.08)",
+  radius: 8,
+  radiusLg: 12,
+} as const;

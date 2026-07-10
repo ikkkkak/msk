@@ -1,0 +1,67 @@
+{
+  "expo": {
+    "name": "habitat",
+    "slug": "habitat",
+    "version": "1.2.2",
+    "orientation": "portrait",
+    "icon": "./assets/logo.png",
+    "scheme": "com.jeremypersing.apartmentsclone",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-notifications",
+      "expo-asset",
+      "expo-font",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-localization"
+    ],
+    "splash": {
+      "image": "./assets/splash.jpg",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jeremypersing.apartmentsclone",
+      "entitlements": {
+        "aps-environment": "production"
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "Habitat Real State requests access to your camera so you can take photos and record videos for your property listings, profile verification, and identity confirmation. This helps ensure that all listings are authentic and meet our quality and security standards.",
+        "NSPhotoLibraryUsageDescription": "Habitat Real State requests access to your photo and video library so you can upload property images and videos for listings, property demonstrations, and identity verification. This access also allows you to add profile verification media before posting properties. All uploaded content is reviewed to ensure the app remains ethical, safe, and compliant with our community standards.",
+        "NSPhotoLibraryAddUsageDescription": "Habitat Real State needs permission to save photos and videos to your device when you choose to download or export your property media. This allows you to keep a local copy of your uploaded or created content.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.jeremypersing.apartmentsclone",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "versionCode": 10
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "82af1c44-83c2-4fd0-8ea9-6f192a0f752e"
+      }
+    },
+    "owner": "isakay-kalo1"
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./google-services.json",
+        "track": "production"
+      }
+    }
+  }
+}

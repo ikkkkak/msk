@@ -1,0 +1,373 @@
+/**
+ * PropertyDetailCard Component
+ * Airbnb-style floating card (no backdrop). Close button sends onClose({ force: true }) for immediate close.
+ */
+
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  Image,
+  Pressable,
+  StyleSheet,
+  Dimensions,
+  Animated as RNAnimated,
+  Easing,
+  Platform
+} from "react-native";
+import { MaterialIcons } from "@expo/vector-icons";
+import * as Haptics from "expo-haptics";
+
+const { width: SCREEN_WIDTH } = Dimensions.get("window");
+
+interface PropertyDetailCardProps {
+  property: any;
+  visible: boolean;
+  onClose: (opts?: { force?: boolean }) => void;
+  onCardPress?: () => void;
+}
+
+export const PropertyDetailCard: React.FC<PropertyDetailCardProps> = ({
+  property,
+  visible,
+  onClose,
+  onCardPress
+}) => {
+  // Track if component should be mounted (for smooth animation)
+  const [shouldRender, setShouldRender] = useState(false);
+
+  // Animated values - start from bottom (off-screen) for dramatic slide-up effect
+  const opacity = useRef(new RNAnimated.Value(0)).current;
+  const translateY = useRef(new RNAnimated.Value(300)).current; // Start 300px below (off-screen)
+  const scale = useRef(new RNAnimated.Value(0.85)).current; // Start smaller for more dramatic effect
+
+  // CRITICAL: Use useLayoutEffect for INSTANT synchronous execution - runs before paint
+  useLayoutEffect(() => {
+    if (visible) {
+      // Mount immediately - no React render cycle delay
+      setShouldRender(true);
+
+      // DISABLE ANIMATIONS ON ANDROID to prevent crashes
+      if (Platform.OS === 'android') {
+        // Android: Set final values immediately (no animations)
+        opacity.setValue(1);
+        translateY.setValue(0);
+        scale.setValue(1);
+        return;
+      }
+
+      // iOS: ULTRA FAST animation - 100ms to match sheet speed
+      opacity.setValue(0);
+      translateY.setValue(300);
+      scale.setValue(0.85);
+
+      // Start animation IMMEDIATELY - synchronous, zero delay, ultra fast
+      RNAnimated.parallel([
+        RNAnimated.timing(opacity, {
+          toValue: 1,
+          duration: 100, // ULTRA FAST - matches sheet speed
+          useNativeDriver: true
+        }),
+        RNAnimated.timing(translateY, {
+          toValue: 0,
+          duration: 100, // ULTRA FAST - matches sheet speed
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true
+        }),
+        RNAnimated.timing(scale, {
+          toValue: 1,
+          duration: 100, // ULTRA FAST - matches sheet speed
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true
+        })
+      ]).start();
+    } else {
+      // DISABLE ANIMATIONS ON ANDROID
+      if (Platform.OS === 'android') {
+        // Android: Unmount immediately
+        setShouldRender(false);
+        return;
+      }
+
+      // iOS: OPTIMIZED slide down animation - faster and smoother
+      RNAnimated.parallel([
+        RNAnimated.timing(opacity, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true
+        }),
+        RNAnimated.timing(translateY, {
+          toValue: 300,
+          duration: 250,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true
+        }),
+        RNAnimated.timing(scale, {
+          toValue: 0.85,
+          duration: 250,
+          easing: Easing.in(Easing.ease),
+          useNativeDriver: true
+        })
+      ]).start(() => {
+        // Unmount after animation completes
+        setShouldRender(false);
+      });
+    }
+  }, [visible, opacity, translateY, scale]);
+
+  // Don't render if not visible and animation completed
+  if (!shouldRender) {
+    return null;
+  }
+
+  const img =
+    Array.isArray(property?.images) && property.images.length > 0
+      ? String(property.images[0])
+      : null;
+
+  const price =
+    property?.listing_price ?? property?.price ?? property?.amount ?? null;
+  const formattedPrice =
+    price != null
+      ? new Intl.NumberFormat("fr-FR", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0
+        }).format(Number(price))
+      : "";
+
+  return (
+    <RNAnimated.View
+      pointerEvents={visible ? "auto" : "none"}
+      style={[
+        styles.container,
+        {
+          opacity,
+          transform: [{ translateY }, { scale }]
+        }
+      ]}
+    >
+      {/* Close Button - CLEAR AND VISIBLE - Easy to click */}
+      <Pressable
+        onPress={() => {
+          Haptics.selectionAsync().catch(() => {});
+          onClose?.({ force: true });
+        }}
+        style={styles.closeButton}
+        hitSlop={40} // Larger hit area for easier clicking
+        android_ripple={{ color: "rgba(0,0,0,0.15)", borderless: false }}
+      >
+        <MaterialIcons name="close" size={22} color="#FFFFFF" />
+      </Pressable>
+
+      <Pressable
+        style={styles.card}
+        onPress={() => {
+          onCardPress?.();
+        }}
+        android_ripple={{ color: "rgba(0,0,0,0.06)" }}
+      >
+        <View style={styles.imageContainer}>
+          {img ? (
+            <Image
+              source={{ uri: img }}
+              style={styles.image}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.imagePlaceholder}>
+              <MaterialIcons name="home" size={36} color="#D1D5DB" />
+            </View>
+          )}
+        </View>
+
+        <View style={styles.content}>
+          <View style={styles.row}>
+            <Text style={styles.priceText}>
+              {formattedPrice ? `${formattedPrice} MRU` : "—"}
+            </Text>
+            {typeof property?.rating === "number" && (
+              <View style={styles.rating}>
+                <MaterialIcons name="star" size={14} color="#FFC107" />
+                <Text style={styles.ratingText}>
+                  {Number(property.rating).toFixed(1)}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.metaRow}>
+            <MaterialIcons name="location-on" size={14} color="#6B7280" />
+            <Text style={styles.locationText} numberOfLines={1}>
+              {property?.address || property?.city || property?.location || ""}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.detailsRow}>
+          {property?.bedrooms != null && (
+            <View style={styles.detailItem}>
+              <MaterialIcons name="bed" size={16} color="#9CA3AF" />
+              <View style={styles.detailTextContainer}>
+                <Text style={styles.detailTitle}>Bedrooms</Text>
+                <Text style={styles.detailText}>{property.bedrooms}</Text>
+              </View>
+            </View>
+          )}
+          <View style={styles.separator} />
+          {property?.bathrooms != null && (
+            <View style={styles.detailItem}>
+              <MaterialIcons name="bathtub" size={16} color="#9CA3AF" />
+              <View style={styles.detailTextContainer}>
+                <Text style={styles.detailTitle}>Bathrooms</Text>
+                <Text style={styles.detailText}>{property.bathrooms}</Text>
+              </View>
+            </View>
+          )}
+          <View style={styles.separator} />
+          {(property?.square_footage || property?.area) != null && (
+            <View style={styles.detailItem}>
+              <MaterialIcons name="square-foot" size={16} color="#9CA3AF" />
+              <View style={styles.detailTextContainer}>
+                <Text style={styles.detailTitle}>Area</Text>
+                <Text style={styles.detailText}>
+                  {property.square_footage ?? property.area}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+      </Pressable>
+    </RNAnimated.View>
+  );
+};
+const styles = StyleSheet.create({
+  container: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    bottom: 50,
+    zIndex: 999,
+    elevation: 12,
+    maxWidth: 340,
+    alignSelf: "center"
+  },
+  closeButton: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 40, // Larger button - easier to click
+    height: 40, // Larger button - easier to click
+    borderRadius: 20,
+    backgroundColor: "#000000", // Solid black - CLEAR and VISIBLE
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 10, // Higher elevation for better visibility
+    zIndex: 1000,
+    borderWidth: 2,
+    borderColor: "#FFFFFF" // White border for contrast
+  },
+  card: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    overflow: "hidden",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12
+  },
+  imageContainer: {
+    width: "100%",
+    height: 120,
+    backgroundColor: "#F3F4F6",
+    position: "relative"
+  },
+  image: {
+    width: "100%",
+    height: "100%"
+  },
+  imagePlaceholder: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  content: {
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 4
+  },
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6
+  },
+  priceText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111827",
+    letterSpacing: -0.3
+  },
+  rating: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3
+  },
+  ratingText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#111827"
+  },
+  title: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+    marginTop: 4
+  },
+  metaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 10
+  },
+  locationText: {
+    color: "#6B7280",
+    fontSize: 12,
+    flex: 1,
+    fontWeight: "400"
+  },
+  detailsRow: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: "#F3F4F6",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    justifyContent: "space-around"
+  },
+  detailItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
+  },
+  detailText: {
+    fontSize: 12,
+    fontWeight: "400",
+    color: "#6B7280"
+  },
+  separator: {
+    width: 1,
+    height: "100%",
+    backgroundColor: "#E5E7EB"
+  },
+  detailTextContainer: {
+    flexDirection: "row",
+    gap: 2
+  },
+  detailTitle: {
+    fontSize: 12,
+    color: "#6B7280",
+    fontWeight: "400"
+  }
+});

@@ -1,0 +1,952 @@
+/**
+ * Map Component - Professional Airbnb-Style Property Map
+ * Clean, performant, production-ready implementation
+ */
+
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef
+} from "react";
+import {
+  View,
+  StyleSheet,
+  Platform,
+  Pressable,
+  Text,
+  Image
+} from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { MaterialIcons } from "@expo/vector-icons";
+import MapView, { Region, Polygon, Polyline, Marker } from "react-native-maps";
+import * as Haptics from "expo-haptics";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+  Easing,
+  interpolate,
+  Extrapolation
+} from "react-native-reanimated";
+import { Property } from "../types/property";
+import { Card } from "./Card";
+import { theme } from "../theme";
+import { useTranslation } from "react-i18next";
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+const INITIAL_REGION = {
+  latitude: 17.998258963165103,
+  longitude: -15.984606726560688,
+  latitudeDelta: 0.2,
+  longitudeDelta: 0.2
+};
+
+const MARKER_CONFIG = {
+  DOT_SIZE: 12,
+  DOT_INNER_SIZE: 7,
+  CARD_WIDTH: 64,
+  CARD_HEIGHT: 48,
+  CARD_BORDER_RADIUS: 8,
+  ZOOM_THRESHOLD: 0.12
+};
+
+const ANIMATION_CONFIG = {
+  SPRING: { damping: 20, stiffness: 300, mass: 0.8 },
+  SMOOTH: { duration: 400, easing: Easing.bezier(0.25, 0.1, 0.25, 1) },
+  QUICK: { duration: 250, easing: Easing.bezier(0.33, 0, 0.2, 1) },
+  FADE: { duration: 200, easing: Easing.inOut(Easing.ease) }
+};
+
+// ============================================================================
+// UTILITIES
+// ============================================================================
+const getVisibleMarkers = (
+  properties: Property[],
+  region: Region,
+  padding: number = 0.1
+) => {
+  const minLat = region.latitude - region.latitudeDelta * (1 + padding);
+  const maxLat = region.latitude + region.latitudeDelta * (1 + padding);
+  const minLng = region.longitude - region.longitudeDelta * (1 + padding);
+  const maxLng = region.longitude + region.longitudeDelta * (1 + padding);
+
+  return properties.filter(
+    (prop) =>
+      prop.lat >= minLat &&
+      prop.lat <= maxLat &&
+      prop.lng >= minLng &&
+      prop.lng <= maxLng
+  );
+};
+
+// ============================================================================
+// MARKER COMPONENT
+// ============================================================================
+const MarkerPin = React.memo(
+  ({
+    property,
+    isSelected,
+    showAsCard
+  }: {
+    property: Property;
+    isSelected: boolean;
+    showAsCard: boolean;
+  }) => {
+    const priceText = useMemo(() => {
+      const p = property.nightlyPrice || 0;
+      if (p >= 1000000) return `${(p / 1000000).toFixed(1)}M`;
+      if (p >= 1000) return `${Math.round(p / 1000)}K`;
+      return `${p}`;
+    }, [property.nightlyPrice]);
+
+    const imageUrl = useMemo(() => property.images?.[0], [property.images]);
+
+    const containerStyle = useMemo(() => [styles.markerContainer], []);
+    const dotOuterStyle = useMemo(() => [styles.dotOuter], []);
+    const dotInnerStyle = useMemo(
+      () => [styles.dotInner, isSelected && styles.dotInnerSelected],
+      [isSelected]
+    );
+    const cardMarkerStyle = useMemo(
+      () => [styles.cardMarker, isSelected && styles.cardMarkerSelected],
+      [isSelected]
+    );
+    const cardPriceStyle = useMemo(
+      () => [styles.cardPriceText, isSelected && styles.cardPriceTextSelected],
+      [isSelected]
+    );
+    const pointerStyle = useMemo(
+      () => [styles.markerPointer, isSelected && styles.markerPointerSelected],
+      [isSelected]
+    );
+
+    if (!showAsCard) {
+      return (
+        <View style={containerStyle}>
+          <View style={dotOuterStyle}>
+            <View style={dotInnerStyle} />
+          </View>
+        </View>
+      );
+    }
+
+    return (
+      <View style={containerStyle}>
+        <View style={cardMarkerStyle}>
+          <View style={styles.cardImageSection}>
+            {imageUrl ? (
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.cardImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.cardImagePlaceholder}>
+                <MaterialIcons name="home" size={14} color="#FFF" />
+              </View>
+            )}
+          </View>
+          <View style={styles.cardPriceSection}>
+            <Text style={cardPriceStyle} numberOfLines={1}>
+              {priceText}
+            </Text>
+          </View>
+        </View>
+        <View style={pointerStyle} />
+      </View>
+    );
+  },
+  (prevProps, nextProps) => {
+    return (
+      prevProps.isSelected === nextProps.isSelected &&
+      prevProps.showAsCard === nextProps.showAsCard &&
+      prevProps.property.ID === nextProps.property.ID &&
+      prevProps.property.nightlyPrice === nextProps.property.nightlyPrice &&
+      prevProps.property.images?.[0] === nextProps.property.images?.[0]
+    );
+  }
+);
+
+// ============================================================================
+// ZOOM NOTICE COMPONENT
+// ============================================================================
+const ZoomNotice = React.memo(
+  ({ visible, text }: { visible: boolean; text: string }) => {
+    const opacity = useSharedValue(0);
+    const translateY = useSharedValue(-10);
+
+    useEffect(() => {
+      if (visible) {
+        opacity.value = withTiming(1, ANIMATION_CONFIG.FADE);
+        translateY.value = withSpring(0, ANIMATION_CONFIG.SPRING);
+      } else {
+        opacity.value = withTiming(0, ANIMATION_CONFIG.FADE);
+        translateY.value = withTiming(-10, ANIMATION_CONFIG.QUICK);
+      }
+    }, [visible]);
+
+    const animStyle = useAnimatedStyle(() => ({
+      opacity: opacity.value,
+      transform: [{ translateY: translateY.value }]
+    }));
+
+    if (!visible) return null;
+
+    return (
+      <Animated.View
+        style={[styles.zoomNotice, animStyle]}
+        pointerEvents="none"
+      >
+        <MaterialIcons name="zoom-in" size={18} color="#666" />
+        <Text style={styles.zoomNoticeText}>{text}</Text>
+      </Animated.View>
+    );
+  }
+);
+
+// ============================================================================
+// CONTROL BUTTON COMPONENT
+// ============================================================================
+const ControlButton = React.memo(
+  ({
+    icon,
+    onPress,
+    active = false,
+    disabled = false,
+    primary = false
+  }: {
+    icon: string;
+    onPress: () => void;
+    active?: boolean;
+    disabled?: boolean;
+    primary?: boolean;
+  }) => {
+    const scale = useSharedValue(1);
+
+    const handlePressIn = () => {
+      if (!disabled) {
+        scale.value = withSpring(0.92, { damping: 15, stiffness: 400 });
+      }
+    };
+
+    const handlePressOut = () => {
+      scale.value = withSpring(1, ANIMATION_CONFIG.SPRING);
+    };
+
+    const animStyle = useAnimatedStyle(() => ({
+      transform: [{ scale: scale.value }]
+    }));
+
+    const buttonStyle = [
+      styles.controlButton,
+      active && styles.controlButtonActive,
+      primary && styles.controlButtonPrimary,
+      disabled && styles.controlButtonDisabled
+    ];
+
+    const iconColor = primary ? "#FFF" : active ? "#FFF" : "#222";
+
+    return (
+      <Pressable
+        onPress={onPress}
+        onPressIn={handlePressIn}
+        onPressOut={handlePressOut}
+        disabled={disabled}
+      >
+        <Animated.View style={[buttonStyle, animStyle]}>
+          <MaterialIcons name={icon as any} size={16} color={iconColor} />
+        </Animated.View>
+      </Pressable>
+    );
+  }
+);
+
+// ============================================================================
+// MAIN MAP COMPONENT
+// ============================================================================
+export const Map = ({
+  properties,
+  mapRef,
+  location,
+  setLocation,
+  initialRegion,
+  onPropertySelect,
+  onMapPress,
+  selectedPropertyId,
+  drawingEnabledExternally,
+  onApplyPolygon,
+  mapType: mapTypeProp,
+  districtBoundaries,
+  showZones: showZonesProp = true,
+  polygonPoints: externalPolygonPoints,
+  setPolygonPoints: setExternalPolygonPoints
+}: {
+  properties: Property[];
+  mapRef: React.MutableRefObject<MapView | null>;
+  location: string;
+  setLocation: (location: string) => void;
+  initialRegion?: Region;
+  onPropertySelect?: (propertyId: number, index: number) => void;
+  onMapPress?: (coordinate: { latitude: number; longitude: number }) => void;
+  selectedPropertyId?: number | null;
+  showSearchAreaButton?: boolean;
+  enableDrawing?: boolean;
+  drawingEnabledExternally?: boolean;
+  onApplyPolygon?: (polygon: { latitude: number; longitude: number }[]) => void;
+  mapType?: "standard" | "satellite" | "hybrid" | "terrain";
+  districtBoundaries?: Array<{
+    name: string;
+    coordinates: Array<{ latitude: number; longitude: number }>;
+  }>;
+  showZones?: boolean;
+  polygonPoints?: { latitude: number; longitude: number }[];
+  setPolygonPoints?: (
+    points: { latitude: number; longitude: number }[]
+  ) => void;
+}) => {
+  const navigation = useNavigation();
+  const { t } = useTranslation();
+
+  // Use refs for region to prevent re-renders during zoom (UNCONTROLLED MapView)
+  const regionRef = useRef<Region>(initialRegion || INITIAL_REGION);
+  const initialRegionRef = useRef<Region>(regionRef.current);
+  const [regionKey, setRegionKey] = useState(0); // Trigger viewport updates without state
+
+  // State
+  const [zonesVisible, setZonesVisible] = useState(showZonesProp);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [mapType, setMapType] = useState<"standard" | "satellite">(
+    mapTypeProp === "standard" || mapTypeProp === "satellite"
+      ? mapTypeProp
+      : "standard"
+  );
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [drawingPath, setDrawingPath] = useState<
+    { latitude: number; longitude: number }[]
+  >([]);
+  const [isInteracting, setIsInteracting] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(regionRef.current.latitudeDelta);
+
+  const polygonPoints = externalPolygonPoints ?? [];
+  const setPolygonPointsCallback = useCallback(
+    (
+      points:
+        | { latitude: number; longitude: number }[]
+        | ((
+            prev: { latitude: number; longitude: number }[]
+          ) => { latitude: number; longitude: number }[])
+    ) => {
+      if (!setExternalPolygonPoints) return;
+      setExternalPolygonPoints(
+        typeof points === "function" ? points(polygonPoints) : points
+      );
+    },
+    [polygonPoints, setExternalPolygonPoints]
+  );
+
+  // Computed values - Use zoomLevel state for reactivity without region state
+  const isZoomedIn = useMemo(
+    () => zoomLevel <= MARKER_CONFIG.ZOOM_THRESHOLD,
+    [zoomLevel]
+  );
+
+  const visibleProperties = useMemo(
+    () => getVisibleMarkers(properties, regionRef.current, 0.2),
+    [properties, regionKey] // Update when regionKey changes
+  );
+
+  const selectedIndex = useMemo(() => {
+    if (selectedPropertyId != null) {
+      return properties.findIndex((p) => p.ID === selectedPropertyId);
+    }
+    return activeIndex;
+  }, [selectedPropertyId, activeIndex, properties]);
+
+  // Card animation
+  const cardProgress = useSharedValue(0);
+
+  useEffect(() => {
+    const shouldShow = selectedIndex >= 0 && isZoomedIn;
+    cardProgress.value = withSpring(
+      shouldShow ? 1 : 0,
+      ANIMATION_CONFIG.SPRING
+    );
+  }, [selectedIndex, isZoomedIn]);
+
+  const cardAnimStyle = useAnimatedStyle(() => ({
+    opacity: cardProgress.value,
+    transform: [
+      { translateY: interpolate(cardProgress.value, [0, 1], [20, 0]) },
+      { scale: interpolate(cardProgress.value, [0, 1], [0.95, 1]) }
+    ]
+  }));
+
+  // Handlers
+  const dismissCard = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setActiveIndex(-1);
+    onMapPress?.({ latitude: 0, longitude: 0 });
+    if (!onPropertySelect) {
+      navigation.setOptions({ tabBarStyle: { display: "flex" } });
+    }
+  }, [onMapPress, onPropertySelect, navigation]);
+
+  const handleMarkerPress = useCallback(
+    (index: number) => {
+      const property = properties[index];
+      if (!property) {
+        return;
+      }
+
+      // CRITICAL: Call onPropertySelect FIRST - instant response, no delays
+      if (onPropertySelect) {
+        // Pass property object as second parameter for detailed card
+        onPropertySelect(property.ID, property);
+      }
+
+      // Haptic feedback (non-blocking)
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+
+      // Animate to property location (NON-BLOCKING - happens in background)
+      // Use requestAnimationFrame to ensure it doesn't block UI
+      requestAnimationFrame(() => {
+        const targetDelta = Math.min(
+          regionRef.current.latitudeDelta * 0.7,
+          0.05
+        );
+        mapRef.current?.animateToRegion(
+          {
+            latitude: property.lat,
+            longitude: property.lng,
+            latitudeDelta: targetDelta,
+            longitudeDelta: targetDelta
+          },
+          300 // Reduced from 350ms to 300ms for faster animation
+        );
+      });
+      
+      if (!onPropertySelect) {
+        // Fallback behavior if onPropertySelect not provided
+        setActiveIndex(index);
+        navigation.setOptions({ tabBarStyle: { display: "none" } });
+
+        const targetDelta = Math.min(regionRef.current.latitudeDelta * 0.7, 0.05);
+        mapRef.current?.animateToRegion(
+          {
+            latitude: property.lat,
+            longitude: property.lng,
+            latitudeDelta: targetDelta,
+            longitudeDelta: targetDelta
+          },
+          300
+        );
+      }
+
+      setActiveIndex(index);
+      navigation.setOptions({ tabBarStyle: { display: "none" } });
+
+      const targetDelta = Math.min(regionRef.current.latitudeDelta * 0.7, 0.05);
+      mapRef.current?.animateToRegion(
+        {
+          latitude: property.lat,
+          longitude: property.lng,
+          latitudeDelta: targetDelta,
+          longitudeDelta: targetDelta
+        },
+        350
+      );
+    },
+    [properties, onPropertySelect, navigation, mapRef]
+  );
+
+  const handleMapPress = useCallback(() => {
+    if (!isDrawing) {
+      dismissCard();
+    }
+  }, [isDrawing, dismissCard]);
+
+  const handleRegionChangeComplete = useCallback((newRegion: Region) => {
+    // Update ref without causing re-render
+    regionRef.current = newRegion;
+    setZoomLevel(newRegion.latitudeDelta);
+    setRegionKey((prev) => prev + 1); // Trigger viewport update
+    setIsInteracting(false);
+  }, []);
+
+  const toggleZones = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setZonesVisible((prev) => !prev);
+  }, []);
+
+  const toggleMapType = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setMapType((prev) => (prev === "standard" ? "satellite" : "standard"));
+  }, []);
+
+  const handleClearDrawing = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setDrawingPath([]);
+    setPolygonPointsCallback([]);
+  }, [setPolygonPointsCallback]);
+
+  const handleApplyDrawing = useCallback(() => {
+    const path = drawingPath.length >= 3 ? drawingPath : polygonPoints;
+    if (path.length >= 3) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+        () => {}
+      );
+      const closedPath = [...path, path[0]];
+      setPolygonPointsCallback(closedPath);
+      onApplyPolygon?.(closedPath);
+      setIsDrawing(false);
+      setDrawingPath([]);
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(
+        () => {}
+      );
+    }
+  }, [drawingPath, polygonPoints, onApplyPolygon, setPolygonPointsCallback]);
+
+  // Sync external props
+  useEffect(() => {
+    if (showZonesProp !== undefined) setZonesVisible(showZonesProp);
+  }, [showZonesProp]);
+
+  useEffect(() => {
+    if (typeof drawingEnabledExternally === "boolean") {
+      setIsDrawing(drawingEnabledExternally);
+    }
+  }, [drawingEnabledExternally]);
+
+  useEffect(() => {
+    if (mapTypeProp === "standard" || mapTypeProp === "satellite") {
+      setMapType(mapTypeProp);
+    }
+  }, [mapTypeProp]);
+
+  return (
+    <View style={styles.container}>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        mapType={mapType || "standard"}
+        initialRegion={initialRegionRef.current}
+        onPress={handleMapPress}
+        onRegionChangeComplete={handleRegionChangeComplete}
+        userInterfaceStyle="light"
+        scrollEnabled={!isDrawing}
+        zoomEnabled={!isDrawing}
+        pitchEnabled={false}
+        rotateEnabled={false}
+        showsCompass={false}
+        showsScale={false}
+        toolbarEnabled={false}
+        loadingEnabled={false}
+        loadingIndicatorColor={theme["color-temporary-primary"]}
+        loadingBackgroundColor="#FFF"
+      >
+        {/* District Boundaries */}
+        {districtBoundaries?.map((district, idx) => {
+          const centerLat =
+            district.coordinates.reduce((sum, c) => sum + c.latitude, 0) /
+            district.coordinates.length;
+          const centerLng =
+            district.coordinates.reduce((sum, c) => sum + c.longitude, 0) /
+            district.coordinates.length;
+
+          return (
+            <React.Fragment key={`zone-${idx}`}>
+              <Polygon
+                coordinates={district.coordinates}
+                strokeColor={
+                  zonesVisible ? "rgba(255,255,255,0.3)" : "transparent"
+                }
+                fillColor={
+                  zonesVisible ? "rgba(255,255,255,0.03)" : "transparent"
+                }
+                strokeWidth={zonesVisible ? 1 : 0}
+              />
+              {zonesVisible && district.name && (
+                <Marker
+                  coordinate={{ latitude: centerLat, longitude: centerLng }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={false}
+                >
+                  <Text style={styles.districtLabel}>{district.name}</Text>
+                </Marker>
+              )}
+            </React.Fragment>
+          );
+        })}
+
+        {/* Drawing Polygon */}
+        {isDrawing && drawingPath.length >= 2 && (
+          <Polyline
+            coordinates={drawingPath}
+            strokeColor={theme["color-temporary-primary"]}
+            strokeWidth={3}
+            lineCap="round"
+            lineJoin="round"
+          />
+        )}
+
+        {/* Applied Polygon */}
+        {!isDrawing && polygonPoints.length >= 3 && (
+          <>
+            <Polygon
+              coordinates={polygonPoints}
+              strokeWidth={0}
+              fillColor="rgba(0, 166, 153, 0.15)"
+            />
+            <Polyline
+              coordinates={polygonPoints}
+              strokeColor="#00A699"
+              strokeWidth={2}
+            />
+          </>
+        )}
+
+        {/* Property Markers */}
+        {!isDrawing &&
+          !isInteracting &&
+          visibleProperties.map((prop) => {
+            if (!prop.lat || !prop.lng) return null;
+
+            const fullIndex = properties.findIndex((p) => p.ID === prop.ID);
+            const isSelected = selectedIndex === fullIndex;
+
+            return (
+              <Marker
+                key={`marker-${prop.ID}-${isZoomedIn ? "card" : "dot"}`}
+                coordinate={{ latitude: prop.lat, longitude: prop.lng }}
+                tracksViewChanges={false}
+                anchor={{ x: 0.5, y: 1 }}
+                zIndex={isSelected ? 1000 : 100}
+                onPress={() => handleMarkerPress(fullIndex)}
+                stopPropagation
+              >
+                <MarkerPin
+                  property={prop}
+                  isSelected={isSelected}
+                  showAsCard={isZoomedIn}
+                />
+              </Marker>
+            );
+          })}
+      </MapView>
+
+      {/* Zoom Notice */}
+      <ZoomNotice
+        visible={!isZoomedIn && !isDrawing}
+        text={t("map.zoomNotice", "Zoom in to see property details")}
+      />
+
+      {/* Control Buttons */}
+      <View style={styles.controls}>
+        {!isDrawing ? (
+          <>
+            {districtBoundaries && districtBoundaries.length > 0 && (
+              <ControlButton
+                icon="layers"
+                onPress={toggleZones}
+                active={zonesVisible}
+              />
+            )}
+            <ControlButton icon="edit" onPress={() => setIsDrawing(true)} />
+            <ControlButton
+              icon={mapType === "satellite" ? "map" : "satellite-alt"}
+              onPress={toggleMapType}
+            />
+          </>
+        ) : (
+          <>
+            <ControlButton icon="delete-outline" onPress={handleClearDrawing} />
+            <ControlButton
+              icon="check"
+              onPress={handleApplyDrawing}
+              primary
+              disabled={drawingPath.length < 3 && polygonPoints.length < 3}
+            />
+            <ControlButton
+              icon="close"
+              onPress={() => {
+                setIsDrawing(false);
+                setDrawingPath([]);
+              }}
+            />
+          </>
+        )}
+      </View>
+
+      {/* Property Detail Card */}
+      {selectedIndex >= 0 && selectedIndex < properties.length && (
+        <Animated.View style={[styles.cardContainer, cardAnimStyle]}>
+          <Pressable
+            style={styles.closeButton}
+            onPress={dismissCard}
+            hitSlop={12}
+          >
+            <MaterialIcons name="close" size={20} color="#222" />
+          </Pressable>
+          <Card
+            property={properties[selectedIndex]}
+            style={styles.card}
+            onPress={() =>
+              (navigation as any).navigate("PropertyDetails", {
+                propertyID: properties[selectedIndex].ID
+              })
+            }
+          />
+        </Animated.View>
+      )}
+    </View>
+  );
+};
+
+// ============================================================================
+// STYLES
+// ============================================================================
+const styles = StyleSheet.create({
+  container: {
+    flex: 1
+  },
+  map: {
+    flex: 1
+  },
+
+  // Markers
+  markerContainer: {
+    alignItems: "center",
+    justifyContent: "flex-end"
+  },
+  dotOuter: {
+    width: MARKER_CONFIG.DOT_SIZE * 2,
+    height: MARKER_CONFIG.DOT_SIZE * 2,
+    borderRadius: MARKER_CONFIG.DOT_SIZE,
+    // backgroundColor: "rgba(171, 0, 3, 0.15)",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  dotInner: {
+    width: MARKER_CONFIG.DOT_INNER_SIZE * 2,
+    height: MARKER_CONFIG.DOT_INNER_SIZE * 2,
+    borderRadius: MARKER_CONFIG.DOT_INNER_SIZE,
+    backgroundColor: "#AB0003",
+    borderWidth: 2,
+    borderColor: "#FFF",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 3
+      },
+      android: {
+        elevation: 4
+      }
+    })
+  },
+  dotInnerSelected: {
+    backgroundColor: theme["color-temporary-primary"],
+    borderWidth: 2.5,
+    transform: [{ scale: 1.15 }]
+  },
+  cardMarker: {
+    width: MARKER_CONFIG.CARD_WIDTH,
+    height: MARKER_CONFIG.CARD_HEIGHT,
+    backgroundColor: "#AB0003",
+    overflow: "hidden",
+    borderWidth: 2,
+    borderColor: "#FFF",
+    borderRadius: MARKER_CONFIG.CARD_BORDER_RADIUS,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.25,
+        shadowRadius: 8
+      },
+      android: {
+        elevation: 6
+      }
+    })
+  },
+  cardMarkerSelected: {
+    borderColor: theme["color-temporary-primary"],
+    borderWidth: 2.5,
+    transform: [{ scale: 1.08 }],
+    ...Platform.select({
+      ios: {
+        shadowOpacity: 0.35,
+        shadowRadius: 12
+      },
+      android: {
+        elevation: 10
+      }
+    })
+  },
+  cardImageSection: {
+    flex: 1,
+    width: "100%",
+    backgroundColor: "rgba(0,0,0,0.1)"
+  },
+  cardImage: {
+    width: "100%",
+    height: "100%"
+  },
+  cardImagePlaceholder: {
+    width: "100%",
+    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.1)"
+  },
+  cardPriceSection: {
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  cardPriceText: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: "#FFF",
+    letterSpacing: -0.3
+  },
+  cardPriceTextSelected: {
+    fontSize: 9,
+    fontWeight: "800"
+  },
+  markerPointer: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderTopWidth: 5,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+    borderTopColor: "#AB0003",
+    marginTop: -1
+  },
+  markerPointerSelected: {
+    borderTopColor: theme["color-temporary-primary"],
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderTopWidth: 6
+  },
+
+  // UI Elements
+  zoomNotice: {
+    position: "absolute",
+    top: 16,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 24,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8
+      },
+      android: {
+        elevation: 4
+      }
+    })
+  },
+  zoomNoticeText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#666"
+  },
+  controls: {
+    position: "absolute",
+    right: 16,
+    top: "50%",
+    marginTop: -80,
+    gap: 12
+  },
+  controlButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FFF",
+    alignItems: "center",
+    justifyContent: "center",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 6
+      },
+      android: {
+        elevation: 4
+      }
+    })
+  },
+  controlButtonActive: {
+    backgroundColor: "#222"
+  },
+  controlButtonPrimary: {
+    backgroundColor: theme["color-temporary-primary"]
+  },
+  controlButtonDisabled: {
+    opacity: 0.4
+  },
+  districtLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#FFF",
+    textShadowColor: "rgba(0,0,0,0.7)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+    textTransform: "uppercase",
+    letterSpacing: 0.5
+  },
+
+  // Card
+  cardContainer: {
+    position: "absolute",
+    bottom: 16,
+    left: 16,
+    right: 16
+  },
+  closeButton: {
+    position: "absolute",
+    top: -48,
+    left: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FFF",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 100,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 6
+      },
+      android: {
+        elevation: 4
+      }
+    })
+  },
+  card: {
+    borderRadius: 16,
+    overflow: "hidden"
+  }
+});

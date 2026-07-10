@@ -1,0 +1,51 @@
+{
+  "hostSuggestions": {
+    "noImage": "No image",
+    "defaultContactMessage": "Hello, your profile matches our listing. Would you like to discuss?",
+    "emptyNoPropertyBody": "Publish a listing first to start receiving buyer matches.",
+    "empty": "No matching buyers right now. When people browse or save listings like yours, they'll appear here.",
+    "generatingBody": "Analyzing recent activity on your listings. This usually takes less than a minute — keep this screen open or tap Refresh.",
+    "paywallBody": "{{count}} more interested buyers are waiting. Contact us to unlock full insights.",
+    "paywallContactFallback": "Please email support@meskeny.com to unlock full buyer insights.",
+    "contactBuyerNoConsent": "This buyer is no longer available for host matching.",
+    "contactBuyerLocked": "This buyer is already connected with another host.",
+    "endpointUnavailable": "Suggestions service is unavailable on this server.",
+    "sessionExpiredSub": "Your session expired. Sign in again to see matching buyers."
+  },
+  "myProperties": {
+    "summaryPending": "{{count}} pending review",
+    "summarySub": "Tap a listing to edit details and pricing.",
+    "sessionExpiredSub": "Your session ended. Sign in again to view your rental listings.",
+    "status": {
+      "rejected": "Rejected"
+    }
+  },
+  "organization": {
+    "team": {
+      "emptyTitle": "No team members yet",
+      "emptyMessage": "Invite team members to collaborate"
+    },
+    "unnamedAgency": "Unnamed agency",
+    "noTitle": "Untitled listing",
+    "defaultProperty": "Property",
+    "untitledVideo": "Video listing",
+    "unknownOwner": "Unknown",
+    "dashboard": "Agency dashboard"
+  },
+  "listingAi": {
+    "publishing": "Publishing…",
+    "pleaseWait": "Please wait"
+  },
+  "listing": {
+    "landmark": {
+      "landType": {
+        "residential": "Residential",
+        "commercial": "Commercial",
+        "agricultural": "Agricultural",
+        "industrial": "Industrial",
+        "mixed": "Mixed use",
+        "other": "Other"
+      }
+    }
+  }
+}

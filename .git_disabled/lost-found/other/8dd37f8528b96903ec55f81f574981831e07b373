@@ -1,0 +1,4523 @@
+import React, { useCallback, useRef, useState, useEffect } from "react";
+import {
+  View,
+  StyleSheet,
+  Dimensions,
+  FlatList,
+  TouchableOpacity,
+  Image,
+  Modal,
+  TextInput,
+  Animated,
+  PanResponder,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Keyboard,
+  Easing as RNEaseClassic,
+  ActivityIndicator
+} from "react-native";
+// Use legacy API for stable downloadAsync until new File/Directory API is adopted
+import * as FileSystem from "expo-file-system/legacy";
+import * as MediaLibrary from "expo-media-library";
+import LottieView from "lottie-react-native";
+import { publicApi } from "../services/api";
+import Reanimated, {
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+  withDelay,
+  Easing as RNEasing
+} from "react-native-reanimated";
+import { Text } from "@ui-kitten/components";
+import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
+import { Video, ResizeMode, Audio } from "expo-av";
+import * as Haptics from "expo-haptics";
+import {
+  useLikedVideosQuery,
+  useSavedVideosQuery
+} from "../hooks/queries/useVideoFeedQuery";
+import {
+  useLikedPropertySaleVideosQuery,
+  useSavedPropertySaleVideosQuery
+} from "../hooks/queries/usePropertySaleVideoFeedQuery";
+import { useAccumulatedVideos } from "../hooks/queries/useCursorVideoFeed";
+import { usePropertySaleVideoCommentsQuery } from "../hooks/queries/usePropertySaleVideoCommentsQuery";
+import {
+  useLikeVideoMutation,
+  useUnlikeVideoMutation,
+  useSaveVideoMutation,
+  useUnsaveVideoMutation
+} from "../hooks/mutations/useVideoMutations";
+import {
+  useLikePropertySaleVideoMutation,
+  useUnlikePropertySaleVideoMutation,
+  useSavePropertySaleVideoMutation,
+  useUnsavePropertySaleVideoMutation
+} from "../hooks/mutations/usePropertySaleVideoMutations";
+import {
+  useReportVideoMutation,
+  useFlagUserMutation,
+  useHideVideoMutation
+} from "../hooks/mutations/useVideoReporting";
+import { Video as VideoType } from "../types/video";
+import { PropertySaleVideo as PropertySaleVideoType } from "../types/propertySaleVideo";
+import Toast from "../components/CustomToast";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import {
+  ArrowBendLeftDownIcon,
+  BathtubIcon,
+  BedIcon,
+  Heart,
+  ChatCircle,
+  Play,
+  BookmarkSimpleIcon
+} from "phosphor-react-native";
+import { useTranslation } from "react-i18next";
+import { useUser } from "../hooks/useUser";
+import { useLanguage } from "../contexts/LanguageContext";
+import { theme } from "../theme";
+import { getOrCreateDeviceId } from "../utils/deviceId";
+import { videoEndpoints } from "../constants";
+import { api } from "../services/api";
+// Translation hooks removed - backend handles all translations
+// Optional Skia (heart burst). If not installed, feature gracefully degrades.
+let SkiaLib: any = null;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  SkiaLib = require("@shopify/react-native-skia");
+} catch {}
+
+const { height, width } = Dimensions.get("window");
+const PAGE_HEIGHT = height - 80; // match space above bottom tabs
+const LAZY_RENDER_DISTANCE = 1; // Only render current ±1 video
+const PREFETCH_DISTANCE = 2; // Prefetch thumbnails for the next 2 videos
+
+// Property Title Component (uses backend-translated title)
+const TranslatedPropertyTitle = ({
+  title,
+  style
+}: {
+  title: string;
+  style?: any;
+}) => {
+  // Title is already translated by backend based on device language
+  return (
+    <Text style={style} numberOfLines={1}>
+      {title}
+    </Text>
+  );
+};
+
+// Skeleton Loading Component
+// Comment Item Component - Smooth Continuous Horizontal Wheel (Translation Only)
+const CommentItem: React.FC<{
+  comment: any;
+  startX: number;
+  duration: number;
+  containerWidth: number;
+}> = ({ comment, startX, duration, containerWidth }) => {
+  // Pure horizontal translation animation - no opacity, no scaling, no popping
+  const translateX = useSharedValue(startX);
+
+  useEffect(() => {
+    // Continuous horizontal movement - from right edge to left edge
+    // startX is the starting position (containerWidth = right edge)
+    // End at negative value to fully exit left of container
+    const endX = -(containerWidth + 100); // Slide completely off left of container
+
+    // Linear animation for constant speed (horizontal conveyor belt effect)
+    translateX.value = withTiming(endX, {
+      duration: duration, // Duration in ms for smooth constant speed
+      easing: RNEasing.linear // Linear for constant speed - no easing curves
+    });
+  }, [startX, duration, containerWidth]);
+
+  // Pure horizontal translation - GPU-accelerated transform only
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: translateX.value }]
+    // No opacity changes - pure translation only
+  }));
+
+  const formatTime = (dateString: string) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "now";
+    if (diffMins < 60) return `${diffMins}m`;
+    if (diffHours < 24) return `${diffHours}h`;
+    if (diffDays < 7) return `${diffDays}d`;
+    return date.toLocaleDateString();
+  };
+
+  const userName =
+    (comment.user as any)?.name || comment.user?.email || "Anonymous";
+
+  return (
+    <Reanimated.View
+      style={[
+        styles.commentCardHorizontal,
+        animatedStyle,
+        { position: "absolute", top: 0 }
+      ]}
+    >
+      <Text style={styles.commentTextHorizontal} numberOfLines={2}>
+        {comment.content}
+      </Text>
+    </Reanimated.View>
+  );
+};
+
+// Property Sale Video Comments Feed Component - Smooth Continuous Horizontal Wheel
+// const PropertySaleVideoCommentsFeed: React.FC<{ propertySaleID: number; isVisible: boolean; currentVideoIndex: number; videoIndex: number }> = ({ propertySaleID, isVisible, currentVideoIndex, videoIndex }) => {
+//   const { data: comments = [], isLoading } = usePropertySaleVideoCommentsQuery(propertySaleID);
+//   const [activeComments, setActiveComments] = useState<Array<{ comment: any; startX: number; startTime: number; id: string }>>([]);
+//   const commentIdRef = useRef(0);
+//   const loopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+//   // Animation constants for horizontal wheel - pushed down for better visibility
+//   const CONTAINER_TOP = 60; // Pushed down from top for better visibility
+//   const CONTAINER_WIDTH = width; // Full screen width
+//   const CONTAINER_HEIGHT = 60; // Height for 2-line comments
+
+//   // Horizontal animation constants
+//   const COMMENT_SPEED = 0.08; // pixels per millisecond (smooth horizontal speed)
+//   const COMMENT_SPACING = 200; // Horizontal spacing between comments (px) - ensure no vertical stacking
+//   const ANIMATION_DISTANCE = CONTAINER_WIDTH + 200; // Travel from right edge to left edge + buffer
+//   const ANIMATION_DURATION = ANIMATION_DISTANCE / COMMENT_SPEED; // Duration for full horizontal travel
+//   const COMMENT_INTERVAL = COMMENT_SPACING / COMMENT_SPEED; // Time between new comments
+//   const LOOP_DELAY = 2000; // 2 seconds delay before looping
+
+//   useEffect(() => {
+//     if (!isVisible || videoIndex !== currentVideoIndex || isLoading || comments.length === 0) {
+//       setActiveComments([]);
+//       if (loopTimeoutRef.current) {
+//         clearTimeout(loopTimeoutRef.current);
+//         loopTimeoutRef.current = null;
+//       }
+//       return;
+//     }
+
+//     // Reverse comments so newest appears first
+//     const reversedComments = [...comments].reverse();
+//     let commentIndex = 0;
+//     let isLooping = false;
+
+//     // Function to add next comment to the horizontal wheel
+//     const addNextComment = () => {
+//       if (commentIndex >= reversedComments.length) {
+//         // Reached end - wait 2 seconds before looping
+//         if (!isLooping) {
+//           isLooping = true;
+//           loopTimeoutRef.current = setTimeout(() => {
+//             commentIndex = 0; // Loop back to start
+//             isLooping = false;
+//             addNextComment(); // Continue after delay
+//           }, LOOP_DELAY);
+//           return;
+//         }
+//         commentIndex = 0; // Loop back to start
+//       }
+
+//       const comment = reversedComments[commentIndex];
+//       const now = Date.now();
+//       const uniqueId = `${comment.ID}-${commentIdRef.current++}`;
+
+//       // Start position: comment starts at right edge of screen
+//       const startX = CONTAINER_WIDTH; // Start at right edge
+
+//       // Add new comment to active list
+//       setActiveComments(prev => [...prev, { comment, startX, startTime: now, id: uniqueId }]);
+//       commentIndex++;
+
+//       // Clean up comments that have fully exited (older than animation duration)
+//       setTimeout(() => {
+//         setActiveComments(prev => prev.filter(item => item.id !== uniqueId));
+//       }, ANIMATION_DURATION + 500);
+//     };
+
+//     // Add first comment immediately
+//     addNextComment();
+
+//     // Add subsequent comments with spacing delay for continuous horizontal flow
+//     const interval = setInterval(() => {
+//       if (!isLooping) {
+//         addNextComment();
+//       }
+//     }, COMMENT_INTERVAL);
+
+//     return () => {
+//       clearInterval(interval);
+//       if (loopTimeoutRef.current) {
+//         clearTimeout(loopTimeoutRef.current);
+//         loopTimeoutRef.current = null;
+//       }
+//     };
+//   }, [comments, isVisible, isLoading, currentVideoIndex, videoIndex]);
+
+//   if (!isVisible || videoIndex !== currentVideoIndex || isLoading || comments.length === 0) return null;
+
+//   return (
+//     <View style={styles.commentsFeedContainerHorizontal} pointerEvents="none">
+//       {activeComments.map((item) => (
+//         <CommentItem
+//           key={item.id}
+//           comment={item.comment}
+//           startX={item.startX}
+//           duration={ANIMATION_DURATION}
+//           containerWidth={CONTAINER_WIDTH}
+//         />
+//       ))}
+//     </View>
+//   );
+// };
+
+const VideoSkeleton = () => {
+  const shimmerAnimation = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const shimmer = Animated.loop(
+      Animated.sequence([
+        Animated.timing(shimmerAnimation, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true
+        }),
+        Animated.timing(shimmerAnimation, {
+          toValue: 0,
+          duration: 1000,
+          useNativeDriver: true
+        })
+      ])
+    );
+    shimmer.start();
+    return () => shimmer.stop();
+  }, []);
+
+  const shimmerStyle = {
+    opacity: shimmerAnimation.interpolate({
+      inputRange: [0, 1],
+      outputRange: [0.3, 0.7]
+    })
+  };
+
+  return (
+    <View style={styles.skeletonContainer}>
+      {/* Video Skeleton */}
+      <Animated.View style={[styles.skeletonVideo, shimmerStyle]} />
+
+      {/* Content Skeleton */}
+      <View style={styles.skeletonContent}>
+        <View style={styles.skeletonHeader}>
+          <Animated.View style={[styles.skeletonAvatar, shimmerStyle]} />
+          <View style={styles.skeletonTextContainer}>
+            <Animated.View
+              style={[styles.skeletonText, styles.skeletonTitle, shimmerStyle]}
+            />
+            <Animated.View
+              style={[
+                styles.skeletonText,
+                styles.skeletonSubtitle,
+                shimmerStyle
+              ]}
+            />
+          </View>
+        </View>
+
+        <View style={styles.skeletonActions}>
+          <Animated.View style={[styles.skeletonActionButton, shimmerStyle]} />
+          <Animated.View style={[styles.skeletonActionButton, shimmerStyle]} />
+          <Animated.View style={[styles.skeletonActionButton, shimmerStyle]} />
+        </View>
+      </View>
+    </View>
+  );
+};
+
+export const VideoFeedScreen = () => {
+  const { t } = useTranslation();
+  const navigation = useNavigation();
+  const { user } = useUser();
+  const { currentLanguage } = useLanguage();
+  const langParam = (currentLanguage || "en").toLowerCase();
+
+  // Tab state - "rent" or "sale" (default to "sale" - property sale videos first)
+  const [activeTab, setActiveTab] = useState<"rent" | "sale">("sale");
+
+  // Cursor-based feed - STABLE, does NOT refetch on interactions
+  // Pass language parameter to get translated property titles
+  const {
+    videos: accumulatedVideos,
+    isLoading: rentVideosLoading,
+    fetchNextPage: fetchNextRentPage,
+    hasNextPage: hasNextRentPage,
+    isFetchingNextPage: isFetchingNextRentPage
+  } = useAccumulatedVideos("rent", langParam);
+
+  const {
+    videos: accumulatedSaleVideos,
+    isLoading: saleVideosLoading,
+    fetchNextPage: fetchNextSalePage,
+    hasNextPage: hasNextSalePage,
+    isFetchingNextPage: isFetchingNextSalePage
+  } = useAccumulatedVideos("sale", langParam);
+
+  const { data: likedVideos = [] } = useLikedVideosQuery();
+  const { data: savedVideos = [] } = useSavedVideosQuery();
+  const like = useLikeVideoMutation();
+  const unlike = useUnlikeVideoMutation();
+  const save = useSaveVideoMutation();
+  const unsave = useUnsaveVideoMutation();
+
+  // Debug logging (disabled in production to avoid noise)
+  // if (__DEV__) {
+  //   console.log('🔍 VideoFeedScreen - activeTab:', activeTab);
+  //   console.log('🔍 VideoFeedScreen - propertySaleVideos length:', propertySaleVideos.length);
+  //   console.log('🔍 VideoFeedScreen - saleVideosLoading:', saleVideosLoading);
+  //   console.log('🔍 VideoFeedScreen - propertySaleVideos data:', propertySaleVideos);
+  // }
+  const { data: likedPropertySaleVideos = [] } =
+    useLikedPropertySaleVideosQuery();
+  const { data: savedPropertySaleVideos = [] } =
+    useSavedPropertySaleVideosQuery();
+  const likePropertySaleVideo = useLikePropertySaleVideoMutation();
+  const unlikePropertySaleVideo = useUnlikePropertySaleVideoMutation();
+  const savePropertySaleVideo = useSavePropertySaleVideoMutation();
+  const unsavePropertySaleVideo = useUnsavePropertySaleVideoMutation();
+
+  // Video reporting mutations
+  const reportVideo = useReportVideoMutation();
+  const flagUser = useFlagUserMutation();
+  const hideVideo = useHideVideoMutation();
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error" | "info";
+  } | null>(null);
+
+  const videoRefs = useRef<Array<Video | null>>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [muted, setMuted] = useState(false);
+  const [paused, setPaused] = useState<Record<number, boolean>>({});
+
+  // Clear video refs and reset state when dataset changes to prevent ghost playback
+  useEffect(() => {
+    // Safely pause all existing videos before clearing refs
+    videoRefs.current.forEach((ref) => {
+      if (ref) {
+        try {
+          ref.pauseAsync().catch(() => {});
+        } catch (e) {
+          /* ignore */
+        }
+      }
+    });
+
+    videoRefs.current = [];
+    latestIndexRef.current = 0;
+    setCurrentIndex(0);
+    setPaused({});
+  }, [activeTab]);
+
+  const [liked, setLiked] = useState<Record<number, boolean>>({});
+  const [saved, setSaved] = useState<Record<number, boolean>>({});
+  const [likesCount, setLikesCount] = useState<Record<number, number>>({});
+  const [savesCount, setSavesCount] = useState<Record<number, number>>({});
+  const [likePending, setLikePending] = useState<Record<number, boolean>>({});
+  const [savePending, setSavePending] = useState<Record<number, boolean>>({});
+  const [videoLoading, setVideoLoading] = useState<Record<number, boolean>>({});
+  const prefetchedThumbnails = useRef<Set<number>>(new Set());
+  const [thumbnailLoaded, setThumbnailLoaded] = useState<
+    Record<number, boolean>
+  >({});
+  const [downloadingMap, setDownloadingMap] = useState<Record<number, boolean>>(
+    {}
+  );
+  const [downloadProgress, setDownloadProgress] = useState<
+    Record<number, number>
+  >({}); // 0..1
+  const [isFetchingNextPage, setIsFetchingNextPage] = useState(false);
+  const viewedVideos = useRef<Set<number | string>>(new Set()); // Track viewed videos to avoid duplicate views (supports both numeric and string IDs)
+  const watermarkTranslateX = useRef(new Animated.Value(-80)).current;
+  const preloadedVideos = useRef<Set<number>>(new Set()); // Track preloaded videos
+
+  // Record video view - defined early so it can be used in callbacks
+  const recordVideoView = useCallback(
+    async (videoID: number | string) => {
+      if (viewedVideos.current.has(videoID)) {
+        return; // Already recorded
+      }
+
+      try {
+        viewedVideos.current.add(videoID); // Mark as viewed immediately to prevent duplicates
+        const deviceID = await getOrCreateDeviceId();
+        const payload: { deviceID?: string } = {};
+        if (deviceID) {
+          payload.deviceID = deviceID;
+        }
+
+        // Use publicApi if not authenticated, api if authenticated
+        const apiClient = user?.accessToken ? api : publicApi;
+
+        // Check if this is a property sale video (string ID like "10_0")
+        if (typeof videoID === "string" && videoID.includes("_")) {
+          // Extract propertySaleID from string ID (e.g., "10_0" -> 10)
+          const propertySaleID = parseInt(videoID.split("_")[0], 10);
+          if (!isNaN(propertySaleID)) {
+            // Use property sale video view endpoint (api client already includes /api prefix)
+            const response = await apiClient.post(
+              `/property-sale-videos/${propertySaleID}/view`,
+              payload
+            );
+            console.log(
+              `✅ Recorded view for property sale video ${videoID} (propertySaleID: ${propertySaleID}):`,
+              response.data
+            );
+            return;
+          }
+        }
+
+        // Regular video (numeric ID)
+        const response = await apiClient.post(
+          videoEndpoints.recordView(videoID as number),
+          payload
+        );
+        console.log(`✅ Recorded view for video ${videoID}:`, response.data);
+      } catch (error: any) {
+        console.error(
+          `❌ Failed to record view for video ${videoID}:`,
+          error?.response?.data || error?.message || error
+        );
+        viewedVideos.current.delete(videoID); // Remove on error so it can retry
+      }
+    },
+    [user?.accessToken]
+  );
+
+  // Create a stable reference to recordVideoView for use in callbacks
+  const recordVideoViewRef = useRef(recordVideoView);
+  useEffect(() => {
+    recordVideoViewRef.current = recordVideoView;
+  }, [recordVideoView]);
+
+  const [showWatermark, setShowWatermark] = useState(false);
+
+  // Ask backend for a watermarked variant (server can switch to FFmpeg later without app changes)
+  const getServerWatermarkedUrl = async (rawUrl: string): Promise<string> => {
+    try {
+      const resp = await publicApi.get("/videos/watermark", {
+        params: { url: rawUrl },
+        timeout: 20000
+      });
+      const u = resp?.data?.url;
+      return typeof u === "string" && u.length > 0 ? u : rawUrl;
+    } catch {
+      return rawUrl;
+    }
+  };
+
+  // Per-video heart tap scale animations (elastic pop)
+  const heartTapScaleMap = useRef<Record<number, Animated.Value>>({});
+  const getHeartScaleFor = (id: number) => {
+    if (!heartTapScaleMap.current[id]) {
+      heartTapScaleMap.current[id] = new Animated.Value(1);
+    }
+    return heartTapScaleMap.current[id];
+  };
+  const triggerHeartTapElastic = (id: number) => {
+    const scale = getHeartScaleFor(id);
+    Animated.sequence([
+      Animated.timing(scale, {
+        toValue: 1.25,
+        duration: 160,
+        easing: RNEaseClassic.out(RNEaseClassic.quad),
+        useNativeDriver: true
+      }),
+      Animated.spring(scale, {
+        toValue: 1,
+        friction: 4,
+        tension: 190,
+        useNativeDriver: true
+      })
+    ]).start();
+  };
+
+  // Per-video heart color animation (white -> red)
+  // Removed animated color on icons to avoid setNativeProps errors from vector icons
+
+  // Skia heart animation values (central overlay like X)
+  const heartScale = useSharedValue(0);
+  const heartOpacity = useSharedValue(0);
+  const PARTICLE_COUNT = 12;
+  const particleProgress = Array.from({ length: PARTICLE_COUNT }, () =>
+    useSharedValue(0)
+  );
+  const particleOpacity = Array.from({ length: PARTICLE_COUNT }, () =>
+    useSharedValue(0)
+  );
+  const ringRotation = useSharedValue(0);
+  const particleAnglesRef = useRef<number[]>(
+    Array.from({ length: PARTICLE_COUNT }, (_, i) => {
+      const base = (2 * Math.PI * i) / PARTICLE_COUNT;
+      const jitter = (Math.random() - 0.5) * (Math.PI / 12);
+      return base + jitter;
+    })
+  );
+  const particleColorsRef = useRef<string[]>(
+    Array.from({ length: PARTICLE_COUNT }, () => {
+      const palette = [
+        "#FF385C",
+        "#FFC107",
+        "#22C55E",
+        "#3B82F6",
+        "#A855F7",
+        "#F97316",
+        "#10B981"
+      ];
+      return palette[Math.floor(Math.random() * palette.length)];
+    })
+  );
+  const particleSizesRef = useRef<number[]>(
+    Array.from(
+      { length: PARTICLE_COUNT },
+      () => 4 + Math.round(Math.random() * 3)
+    )
+  );
+  const triggerHeartBurst = useCallback(() => {
+    heartScale.value = 0;
+    heartOpacity.value = 1;
+    // Scale up quickly, keep visible a bit longer, then fade
+    heartScale.value = withTiming(
+      1,
+      { duration: 320, easing: RNEasing.out(RNEasing.cubic) },
+      () => {
+        heartOpacity.value = withDelay(
+          450,
+          withTiming(0, { duration: 380, easing: RNEasing.in(RNEasing.quad) })
+        );
+      }
+    );
+
+    // Particles to ring
+    ringRotation.value = 0;
+    ringRotation.value = withTiming(1, {
+      duration: 900,
+      easing: RNEasing.out(RNEasing.cubic)
+    });
+    particleAnglesRef.current.forEach((_, idx) => {
+      particleOpacity[idx].value = 1;
+      particleProgress[idx].value = 0;
+      // slightly larger stagger for nicer spread
+      const delay = 25 * idx;
+      setTimeout(() => {
+        particleProgress[idx].value = withTiming(1, {
+          duration: 700,
+          easing: RNEasing.out(RNEasing.cubic)
+        });
+        // fade after a short hold
+        setTimeout(() => {
+          particleOpacity[idx].value = withTiming(0, {
+            duration: 500,
+            easing: RNEasing.in(RNEasing.quad)
+          });
+        }, 400);
+      }, delay);
+    });
+  }, [heartScale, heartOpacity]);
+
+  const heartAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: heartOpacity.value,
+    transform: [{ scale: heartScale.value }]
+  }));
+
+  const PARTICLE_RADIUS = 95; // pixels to ring around heart
+  const particleStyles = particleProgress.map((prog, i) =>
+    useAnimatedStyle(() => {
+      const p = prog.value;
+      const angle =
+        (particleAnglesRef.current[i] || 0) +
+        ringRotation.value * 2 * Math.PI * 0.6;
+      const r = PARTICLE_RADIUS * p;
+      const tx = r * Math.cos(angle);
+      const ty = r * Math.sin(angle);
+      return {
+        opacity: particleOpacity[i].value,
+        transform: [
+          { translateX: tx },
+          { translateY: ty },
+          { scale: 1 - 0.3 * p }
+        ]
+      } as any;
+    })
+  );
+
+  // Orbiting blue dot around heart
+  const ORBIT_RADIUS = 80;
+  const orbitProg = useSharedValue(0);
+  const orbitOpacity = useSharedValue(0);
+  const triggerOrbit = useCallback(() => {
+    orbitOpacity.value = 1;
+    orbitProg.value = 0;
+    orbitProg.value = withTiming(
+      1,
+      { duration: 1000, easing: RNEasing.out(RNEasing.cubic) },
+      () => {
+        orbitOpacity.value = withTiming(0, {
+          duration: 400,
+          easing: RNEasing.in(RNEasing.quad)
+        });
+      }
+    );
+  }, [orbitProg, orbitOpacity]);
+
+  // Call orbit together with heart burst
+  const _oldTriggerHeartBurst = triggerHeartBurst;
+  // Wrapper ensures both run (avoid changing existing callers)
+  const triggerAllLikeFx = useCallback(() => {
+    _oldTriggerHeartBurst();
+    triggerOrbit();
+  }, [_oldTriggerHeartBurst, triggerOrbit]);
+
+  // Double-tap detector - separate from single tap
+  const lastTapRef = useRef<number>(0);
+  const tapTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const handleLikeRef = useRef<
+    ((item: VideoType | PropertySaleVideoType) => Promise<void>) | null
+  >(null);
+
+  // Video progress tracker state
+  const [showProgressTracker, setShowProgressTracker] = useState(false);
+  const [currentVideoId, setCurrentVideoId] = useState<number | null>(null);
+  const [videoDuration, setVideoDuration] = useState<Record<number, number>>(
+    {}
+  );
+  const [videoPosition, setVideoPosition] = useState<Record<number, number>>(
+    {}
+  );
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragPosition, setDragPosition] = useState(0);
+
+  // Handle tab changes - NO refetching, use cached data
+  const handleTabChange = (tab: "rent" | "sale") => {
+    setActiveTab(tab);
+    // Tab change does NOT trigger refetch - maintains feed stability
+  };
+
+  // Configure audio to play even in silent mode
+  useEffect(() => {
+    Audio.setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      staysActiveInBackground: false,
+      shouldDuckAndroid: false
+    }).catch((error) => {
+      console.warn("⚠️ Failed to set audio mode:", error);
+    });
+  }, []);
+
+  // Initialize liked/saved state from server data when videos load - WORKS FOR BOTH RENT AND SALE
+  // Use a ref to track the last video IDs we've seen to detect new videos
+  const lastVideoIdsRef = useRef<string>("");
+  const initializedRef = useRef(false);
+  const accumulatedSaleVideosRef = useRef(accumulatedSaleVideos);
+  const accumulatedRentVideosRef = useRef(accumulatedVideos);
+
+  // Update refs when videos change (but don't trigger effect)
+  useEffect(() => {
+    accumulatedSaleVideosRef.current = accumulatedSaleVideos;
+    accumulatedRentVideosRef.current = accumulatedVideos;
+  }, [accumulatedSaleVideos, accumulatedVideos]);
+
+  // Initialize state from server data - CRITICAL: Server is ALWAYS the source of truth on mount/reload
+  useEffect(() => {
+    const videos =
+      activeTab === "sale"
+        ? accumulatedSaleVideosRef.current
+        : accumulatedRentVideosRef.current;
+
+    if (videos.length > 0) {
+      // Create a stable identifier for the current video set
+      const currentVideoIds = videos
+        .map((v: any) => getStableId(v))
+        .sort((a, b) => a - b)
+        .join(",");
+
+      // Only initialize if video set has changed OR if not yet initialized (first load)
+      if (
+        currentVideoIds !== lastVideoIdsRef.current ||
+        !initializedRef.current
+      ) {
+        lastVideoIdsRef.current = currentVideoIds;
+        initializedRef.current = true;
+
+        const updates: {
+          liked: Record<number, boolean>;
+          saved: Record<number, boolean>;
+          likesCount: Record<number, number>;
+          savesCount: Record<number, number>;
+        } = {
+          liked: {},
+          saved: {},
+          likesCount: {},
+          savesCount: {}
+        };
+
+        // Process all videos and initialize from server data - SERVER IS SOURCE OF TRUTH
+        videos.forEach((video: any) => {
+          const stableId = getStableId(video);
+
+          // CRITICAL: Always initialize from server data - server knows the real state
+          // Initialize liked state from server (this is the REAL state after reload)
+          if (video.liked !== undefined) {
+            updates.liked[stableId] = Boolean(video.liked);
+          }
+          // Initialize saved state from server
+          if (video.saved !== undefined) {
+            updates.saved[stableId] = Boolean(video.saved);
+          }
+          // Initialize likes count from server
+          if (typeof video.likesCount === "number" && video.likesCount >= 0) {
+            updates.likesCount[stableId] = video.likesCount;
+          }
+          // Initialize saves count from server
+          if (typeof video.savesCount === "number" && video.savesCount >= 0) {
+            updates.savesCount[stableId] = video.savesCount;
+          }
+        });
+
+        // Update state - SERVER STATE TAKES PRIORITY on initialization
+        // This ensures that after reload, we show the correct liked/saved state from server
+        setLiked((prev) => {
+          const merged = { ...prev };
+          let hasChanges = false;
+          Object.keys(updates.liked).forEach((id) => {
+            const numId = Number(id);
+            // On initialization, server state always wins (overwrites local state)
+            if (merged[numId] !== updates.liked[numId]) {
+              merged[numId] = updates.liked[numId];
+              hasChanges = true;
+            }
+          });
+          return hasChanges ? merged : prev;
+        });
+
+        setSaved((prev) => {
+          const merged = { ...prev };
+          let hasChanges = false;
+          Object.keys(updates.saved).forEach((id) => {
+            const numId = Number(id);
+            if (merged[numId] !== updates.saved[numId]) {
+              merged[numId] = updates.saved[numId];
+              hasChanges = true;
+            }
+          });
+          return hasChanges ? merged : prev;
+        });
+
+        setLikesCount((prev) => {
+          const merged = { ...prev };
+          let hasChanges = false;
+          Object.keys(updates.likesCount).forEach((id) => {
+            const numId = Number(id);
+            if (merged[numId] !== updates.likesCount[numId]) {
+              merged[numId] = updates.likesCount[numId];
+              hasChanges = true;
+            }
+          });
+          return hasChanges ? merged : prev;
+        });
+
+        setSavesCount((prev) => {
+          const merged = { ...prev };
+          let hasChanges = false;
+          Object.keys(updates.savesCount).forEach((id) => {
+            const numId = Number(id);
+            if (merged[numId] !== updates.savesCount[numId]) {
+              merged[numId] = updates.savesCount[numId];
+              hasChanges = true;
+            }
+          });
+          return hasChanges ? merged : prev;
+        });
+      }
+    }
+
+    // Reset when tab changes
+    if (activeTab !== "sale" && activeTab !== "rent") {
+      lastVideoIdsRef.current = "";
+      initializedRef.current = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]); // Only depend on activeTab - use ref to track video changes
+
+  // Focus effect - NO aggressive refetching, maintain stability
+  useFocusEffect(
+    useCallback(() => {
+      // Only check if we have videos, don't refetch
+      // Cursor-based feed handles loading automatically
+      if (
+        activeTab === "rent" &&
+        accumulatedVideos.length === 0 &&
+        !rentVideosLoading
+      ) {
+        console.log("📹 No rent videos in cache, feed will load automatically");
+      }
+      if (
+        activeTab === "sale" &&
+        accumulatedSaleVideos.length === 0 &&
+        !saleVideosLoading
+      ) {
+        console.log("📹 No sale videos in cache, feed will load automatically");
+      }
+    }, [
+      activeTab,
+      accumulatedVideos,
+      accumulatedSaleVideos,
+      rentVideosLoading,
+      saleVideosLoading
+    ])
+  );
+  const [playIconScale] = useState(new Animated.Value(1));
+
+  // Video reporting state
+  const [showOptionsModal, setShowOptionsModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showHideModal, setShowHideModal] = useState(false);
+  const [reportVideoId, setReportVideoId] = useState<number | null>(null);
+  const [reportReason, setReportReason] = useState<string>("");
+  const [reportDescription, setReportDescription] = useState<string>("");
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showSwipeHint, setShowSwipeHint] = useState(true);
+  const scrollVelocityRef = useRef(0);
+  const lastScrollY = useRef(0);
+  const lastScrollTime = useRef(Date.now());
+
+  // Play icon animation
+  useEffect(() => {
+    const pulseAnimation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(playIconScale, {
+          toValue: 1.1,
+          duration: 1000,
+          useNativeDriver: true
+        }),
+        Animated.timing(playIconScale, {
+          toValue: 1,
+          duration: 1000,
+          useNativeDriver: true
+        })
+      ])
+    );
+    pulseAnimation.start();
+    return () => pulseAnimation.stop();
+  }, [playIconScale]);
+
+  // Keyboard event listeners
+  useEffect(() => {
+    const keyboardDidShowListener = Keyboard.addListener(
+      "keyboardDidShow",
+      () => {
+        setKeyboardVisible(true);
+      }
+    );
+    const keyboardDidHideListener = Keyboard.addListener(
+      "keyboardDidHide",
+      () => {
+        setKeyboardVisible(false);
+      }
+    );
+
+    return () => {
+      keyboardDidShowListener?.remove();
+      keyboardDidHideListener?.remove();
+    };
+  }, []);
+
+  // Debug modal states
+  useEffect(() => {
+    console.log("🔍 MODAL STATES:", {
+      showOptionsModal,
+      showReportModal,
+      showHideModal,
+      reportVideoId
+    });
+  }, [showOptionsModal, showReportModal, showHideModal, reportVideoId]);
+
+  // Helper functions to check if video is liked or saved
+  const isVideoLiked = (videoID: number | string) => {
+    // If not authenticated or no access token, treat as not liked
+    if (!user || !user.accessToken) {
+      return false;
+    }
+    const targetStable = (() => {
+      const s = String(videoID);
+      const parts = s.split("_");
+      const n = parseInt(parts[0], 10);
+      return Number.isFinite(n) ? n : Number(videoID);
+    })();
+    if (activeTab === "rent") {
+      const anyLiked = likedVideos.some((video: any) => {
+        const vid = video?.ID;
+        const s = String(vid);
+        const parts = s.split("_");
+        const n = parseInt(parts[0], 10);
+        const stable = Number.isFinite(n) ? n : Number(vid);
+        return stable === targetStable;
+      });
+      return anyLiked || !!liked[targetStable];
+    } else {
+      const anyLiked = likedPropertySaleVideos.some((video: any) => {
+        const vid = video?.ID;
+        const s = String(vid);
+        const parts = s.split("_");
+        const n = parseInt(parts[0], 10);
+        const stable = Number.isFinite(n) ? n : Number(vid);
+        return stable === targetStable;
+      });
+      return anyLiked || !!liked[targetStable];
+    }
+  };
+
+  // Use a stable numeric key for local state even if API IDs are strings like "2_0"
+  const getStableId = (item: VideoType | PropertySaleVideoType): number => {
+    if (typeof (item as any).ID === "string") {
+      const s = String((item as any).ID);
+      const parts = s.split("_");
+      const n = parseInt(parts[0], 10);
+      return Number.isFinite(n) ? n : Date.now();
+    }
+    const n = Number((item as any).ID);
+    return Number.isFinite(n) ? n : Date.now();
+  };
+
+  const computeIsLiked = (item: VideoType | PropertySaleVideoType): boolean => {
+    // If not authenticated or token missing/expired, never show as liked
+    if (!user || !user.accessToken) {
+      return false;
+    }
+    const stableId = getStableId(item);
+    const localLiked = liked[stableId];
+    const serverLiked = Boolean((item as any).liked);
+
+    // CRITICAL: On initial load (when local state is empty), server state is the source of truth
+    // After that, local state (optimistic updates) takes priority until server confirms
+
+    // If local state is explicitly set (true or false), use it (handles optimistic updates)
+    // BUT: If server says liked=true and local is undefined, trust the server (after reload)
+    if (localLiked !== undefined && localLiked !== null) {
+      // Local state exists - use it (optimistic update in progress)
+      return Boolean(localLiked);
+    }
+
+    // Local state is undefined/null - this means we just loaded from server
+    // SERVER STATE IS THE SOURCE OF TRUTH on initial load/reload
+    return Boolean(serverLiked);
+  };
+
+  const isVideoSaved = (
+    videoID: number,
+    item?: VideoType | PropertySaleVideoType
+  ) => {
+    const stableId = videoID;
+
+    if (activeTab === "rent") {
+      // For rent videos: check local state first (optimistic), then server state
+      const localSaved = saved[stableId];
+      if (localSaved !== undefined && localSaved !== null) {
+        return Boolean(localSaved);
+      }
+      // Local state is undefined - use server data (after reload)
+      if (item && (item as any).saved !== undefined) {
+        return Boolean((item as any).saved);
+      }
+      // Fallback to query cache
+      return savedVideos.some((video) => video.ID === videoID);
+    } else {
+      // For property sale videos: check local state first (optimistic), then server flag
+      const localSaved = saved[stableId];
+      // If localSaved is explicitly set (true/false), respect it (optimistic update)
+      if (localSaved === true) {
+        return true;
+      }
+      if (localSaved === false) {
+        return false;
+      }
+      // localSaved is undefined/null - use server data (CRITICAL: Server is source of truth on reload)
+      if (item && (item as any).saved !== undefined) {
+        return Boolean((item as any).saved);
+      }
+      // Fallback to query cache
+      return savedPropertySaleVideos.some((video: any) => {
+        const vid = video?.ID;
+        if (typeof vid === "string") {
+          const parts = vid.split("_");
+          const n = parseInt(parts[0], 10);
+          return Number.isFinite(n) && n === videoID;
+        }
+        return Number(vid) === videoID;
+      });
+    }
+  };
+
+  // Helper functions for video progress tracker
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, "0")}:${secs
+      .toString()
+      .padStart(2, "0")}`;
+  };
+
+  const getCurrentTime = (videoID: number) => {
+    if (isDragging && currentVideoId === videoID) {
+      return dragPosition;
+    }
+    return videoPosition[videoID] || 0;
+  };
+
+  const getTotalTime = (videoID: number) => {
+    return videoDuration[videoID] || 30; // Default to 30 seconds for testing
+  };
+
+  const getProgressPercentage = (videoID: number) => {
+    const current = getCurrentTime(videoID);
+    const total = getTotalTime(videoID);
+    if (total === 0) return 0;
+    return Math.min(current / total, 1);
+  };
+
+  // Pan responder for progress tracker
+  const panResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: () => true,
+    onPanResponderGrant: (evt) => {
+      if (currentVideoId) {
+        setIsDragging(true);
+        setShowProgressTracker(true);
+        const { locationX } = evt.nativeEvent;
+        const progress = locationX / width;
+        const newPosition = progress * getTotalTime(currentVideoId);
+        setDragPosition(newPosition);
+      }
+    },
+    onPanResponderMove: (evt) => {
+      if (currentVideoId && isDragging) {
+        const { locationX } = evt.nativeEvent;
+        const progress = Math.max(0, Math.min(1, locationX / width));
+        const newPosition = progress * getTotalTime(currentVideoId);
+        setDragPosition(newPosition);
+      }
+    },
+    onPanResponderRelease: () => {
+      if (currentVideoId && isDragging) {
+        const videoRef = videoRefs.current[currentIndex];
+        if (videoRef) {
+          videoRef.setPositionAsync(dragPosition * 1000); // Convert to milliseconds
+        }
+        setIsDragging(false);
+        setShowProgressTracker(false);
+        setCurrentVideoId(null);
+      }
+    }
+  });
+
+  // Track latest index to prevent race conditions
+  const latestIndexRef = useRef(0);
+
+  // Proactive video preloading - ensure next videos are ready
+  // We render videos ahead of time, so they start loading automatically
+  // This function just ensures we're tracking which ones are being prepared
+  const preloadUpcomingVideos = useCallback(
+    (currentIdx: number) => {
+      const currentVideos =
+        activeTab === "rent" ? accumulatedVideos : accumulatedSaleVideos;
+      if (!currentVideos || currentVideos.length === 0) return;
+
+      // Mark next 2 videos as should be preloaded
+      // The Video components will handle the actual loading
+      for (let i = 1; i <= 2; i++) {
+        const nextIdx = currentIdx + i;
+        if (nextIdx < currentVideos.length) {
+          const nextVideo = currentVideos[nextIdx];
+          if (nextVideo) {
+            const stableId = getStableId(nextVideo);
+            preloadedVideos.current.add(stableId);
+          }
+        }
+      }
+    },
+    [activeTab, accumulatedVideos, accumulatedSaleVideos]
+  );
+
+  const viewabilityConfig = {
+    itemVisiblePercentThreshold: 60, // Higher threshold for more definitive "active" video
+    minimumViewTime: 0 // Immediate detection
+  } as const;
+
+  const onViewableItemsChanged = useRef(({ viewableItems }: any) => {
+    try {
+      if (viewableItems?.length > 0) {
+        // Filter to find the items that are dominant
+        // In paging, usually one item is most visible
+        const dominantItem = viewableItems.reduce((prev: any, curr: any) =>
+          curr.percentVisible > prev.percentVisible ? curr : prev
+        );
+
+        const idx = dominantItem.index;
+        if (idx === null || idx === undefined) return;
+
+        // If index changed, handle transition immediately
+        if (idx !== latestIndexRef.current) {
+          console.log(
+            `🎥 Video transition: ${latestIndexRef.current} -> ${idx}`
+          );
+
+          const prevIdx = latestIndexRef.current;
+          const oldRef = videoRefs.current[prevIdx];
+
+          // 1. Synchronously update ref to new index
+          latestIndexRef.current = idx;
+
+          // 2. Update state for UI and prop-based control
+          setCurrentIndex(idx);
+
+          // 3. Reset manual pause for the new video so it auto-plays
+          setPaused((prev) => {
+            const newPaused = { ...prev };
+            newPaused[idx] = false;
+            // Also ensure the previous one is marked as "not manually paused"
+            // if we want it to auto-play when user returns (typical TikTok behavior)
+            return newPaused;
+          });
+
+          // 4. Force imperative pause/play for maximum speed (TikTok/Airbnb technology)
+          // Use a small delay if needed to ensure refs are ready, but try immediate first
+
+          // Pause EVERYTHING first to be safe
+          videoRefs.current.forEach((ref, i) => {
+            if (ref) {
+              if (i === idx) {
+                // This is the new video - play it
+                ref.playAsync().catch((e) => console.log("Play error:", e));
+              } else {
+                // All other videos - pause them
+                ref.pauseAsync().catch((e) => console.log("Pause error:", e));
+              }
+            }
+          });
+
+          // 5. Preload upcoming videos
+          preloadUpcomingVideos(idx);
+
+          // 6. Record view for the new video
+          if (dominantItem.item) {
+            const videoID = dominantItem.item.ID;
+            if (videoID && !viewedVideos.current.has(videoID)) {
+              recordVideoViewRef.current(videoID);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error in onViewableItemsChanged:", error);
+    }
+  }).current;
+
+  // Hide the swipe hint on first scroll gesture or after a grace timeout
+  useEffect(() => {
+    if (!showSwipeHint) return;
+    const timer = setTimeout(() => setShowSwipeHint(false), 8000);
+    return () => clearTimeout(timer);
+  }, [showSwipeHint]);
+
+  // Auto-play current video and pause others - safety sync
+  useEffect(() => {
+    const idx = currentIndex;
+
+    videoRefs.current.forEach((ref, i) => {
+      if (!ref) return;
+
+      if (i === idx) {
+        if (!paused[i] && latestIndexRef.current === idx) {
+          ref.playAsync().catch(() => {});
+        }
+      } else {
+        // Explicitly pause anything that isn't the current index
+        ref.pauseAsync().catch(() => {});
+      }
+    });
+  }, [currentIndex, paused]);
+
+  // Preload videos when current index changes
+  useEffect(() => {
+    preloadUpcomingVideos(currentIndex);
+  }, [currentIndex, preloadUpcomingVideos]);
+
+  // Pause all videos when screen loses focus (user navigates away)
+  useFocusEffect(
+    useCallback(() => {
+      // When screen regains focus, ensure current video plays
+      const currentRef = videoRefs.current[currentIndex];
+      if (currentRef) {
+        setPaused((prev) => ({ ...prev, [currentIndex]: false }));
+        setTimeout(() => {
+          currentRef.playAsync().catch(() => {});
+        }, 200);
+      }
+
+      return () => {
+        // When screen loses focus, pause all videos
+        videoRefs.current.forEach((ref, index) => {
+          if (ref) {
+            ref.pauseAsync().catch(() => {});
+          }
+          // Mark all videos as paused to show play button when returning
+          setPaused((prev) => ({ ...prev, [index]: true }));
+        });
+      };
+    }, [currentIndex])
+  );
+
+  // Prefetch thumbnails for current + upcoming videos to avoid flicker
+  useEffect(() => {
+    const dataset =
+      activeTab === "rent" ? accumulatedVideos : accumulatedSaleVideos;
+
+    if (!dataset || dataset.length === 0) return;
+
+    const start = Math.max(0, currentIndex - 1);
+    const end = Math.min(dataset.length - 1, currentIndex + PREFETCH_DISTANCE);
+
+    for (let i = start; i <= end; i++) {
+      const video = dataset[i];
+      if (!video) continue;
+
+      const stableId = getStableId(video);
+      const thumb = video.thumbnailURL || (video as any).thumbnail_url;
+      if (thumb && !prefetchedThumbnails.current.has(stableId)) {
+        prefetchedThumbnails.current.add(stableId);
+        Image.prefetch(thumb).catch(() => {});
+      }
+    }
+  }, [activeTab, accumulatedVideos, accumulatedSaleVideos, currentIndex]);
+
+  // Reset pagination loading state when new data arrives
+  useEffect(() => {
+    const datasetLength =
+      activeTab === "rent"
+        ? accumulatedVideos.length
+        : accumulatedSaleVideos.length;
+
+    if (
+      datasetLength > 0 &&
+      (isFetchingNextRentPage || isFetchingNextSalePage)
+    ) {
+      // Loading state is managed by the cursor feed hook
+    }
+  }, [
+    activeTab,
+    accumulatedVideos,
+    accumulatedSaleVideos,
+    isFetchingNextRentPage,
+    isFetchingNextSalePage
+  ]);
+
+  // Cleanup: pause all videos when component unmounts
+  useEffect(() => {
+    return () => {
+      // Clear tap timeout
+      if (tapTimeoutRef.current) {
+        clearTimeout(tapTimeoutRef.current);
+      }
+      // Safely pause all videos
+      videoRefs.current.forEach((ref) => {
+        if (ref) {
+          try {
+            ref.pauseAsync().catch(() => {});
+          } catch (error) {
+            // Ignore errors during cleanup
+          }
+        }
+      });
+    };
+  }, []);
+
+  // Separate handlers for single tap (play/pause) and double tap (like)
+  const handleSingleTap = useCallback(
+    (index: number) => {
+      // Guard against invalid indices
+      if (index < 0 || index >= videoRefs.current.length) {
+        return;
+      }
+
+      const ref = videoRefs.current[index];
+      if (!ref) return;
+
+      try {
+        const isPaused = paused[index];
+        if (isPaused) {
+          ref.playAsync().catch(() => {});
+          setPaused((p) => ({ ...p, [index]: false }));
+        } else {
+          ref.pauseAsync().catch(() => {});
+          setPaused((p) => ({ ...p, [index]: true }));
+        }
+      } catch (error) {
+        console.log("Error toggling play:", error);
+      }
+    },
+    [paused]
+  );
+
+  const handleDoubleTap = useCallback(
+    (index: number) => {
+      const currentVideos =
+        activeTab === "rent" ? accumulatedVideos : accumulatedSaleVideos;
+      const refItem = currentVideos[index];
+      if (refItem && handleLikeRef.current) {
+        handleLikeRef.current(refItem as any);
+        triggerAllLikeFx();
+      }
+    },
+    [activeTab, accumulatedVideos, accumulatedSaleVideos, triggerAllLikeFx]
+  );
+
+  const handleVideoPress = useCallback(
+    (index: number) => {
+      // Guard against invalid indices
+      if (index < 0 || index >= videoRefs.current.length) {
+        return;
+      }
+
+      const now = Date.now();
+      const delta = now - (lastTapRef.current || 0);
+      lastTapRef.current = now;
+
+      // Clear any pending single tap timeout
+      if (tapTimeoutRef.current) {
+        clearTimeout(tapTimeoutRef.current);
+        tapTimeoutRef.current = null;
+      }
+
+      // Double-tap detection (within 300ms)
+      if (delta < 300) {
+        handleDoubleTap(index);
+        return;
+      }
+
+      // Single tap - delay to allow for double-tap detection
+      tapTimeoutRef.current = setTimeout(() => {
+        handleSingleTap(index);
+        tapTimeoutRef.current = null;
+      }, 300);
+    },
+    [handleSingleTap, handleDoubleTap]
+  );
+
+  const handleToggleMute = () => setMuted((m) => !m);
+
+  // Video event handlers for progress tracking
+  const handleVideoLoad = (videoID: number, status: any) => {
+    if (status.isLoaded) {
+      const duration = status.durationMillis / 1000;
+      console.log(`Video ${videoID} loaded - Duration: ${duration}s`);
+      setVideoDuration((prev) => ({ ...prev, [videoID]: duration }));
+    }
+  };
+
+  const handleVideoProgress = useCallback((videoID: number, status: any) => {
+    if (status.isLoaded) {
+      const position = status.positionMillis / 1000;
+      setVideoPosition((prev) => ({ ...prev, [videoID]: position }));
+
+      // Record view when video has played for at least 2 seconds
+      if (
+        status.isPlaying &&
+        position >= 2 &&
+        !viewedVideos.current.has(videoID)
+      ) {
+        recordVideoViewRef.current(videoID);
+      }
+    }
+  }, []);
+
+  const handleVideoTouch = (videoID: number) => {
+    setCurrentVideoId(videoID);
+    setShowProgressTracker(true);
+    // Hide tracker after 3 seconds
+    setTimeout(() => {
+      if (!isDragging) {
+        setShowProgressTracker(false);
+        setCurrentVideoId(null);
+      }
+    }, 3000);
+  };
+
+  const handleLike = useCallback(
+    async (item: VideoType | PropertySaleVideoType) => {
+      // MANDATORY AUTHENTICATION CHECK
+      if (!user || !user.accessToken) {
+        setToast({
+          message: t("video.loginToLike", "Please sign in to like videos"),
+          type: "info"
+        });
+        return;
+      }
+      const stableId = getStableId(item);
+      if (likePending[stableId]) return;
+
+      const alreadyLiked = computeIsLiked(item);
+      const previousLiked = alreadyLiked;
+      const prevCount = likesCount[stableId] ?? item.likesCount ?? 0;
+
+      // Optimistic update - update local state immediately
+      setLikePending((p) => ({ ...p, [stableId]: true }));
+      const newLikedState = !previousLiked;
+      setLiked((m) => ({ ...m, [stableId]: newLikedState }));
+      setLikesCount((m) => ({
+        ...m,
+        [stableId]: Math.max(0, prevCount + (previousLiked ? -1 : 1))
+      }));
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+      triggerAllLikeFx();
+      triggerHeartTapElastic(stableId);
+
+      try {
+        let response: any = null;
+        if (activeTab === "rent") {
+          response = previousLiked
+            ? await unlike.mutateAsync((item as any).ID)
+            : await like.mutateAsync((item as any).ID);
+        } else {
+          // For property sale videos, extract the propertySaleID from the string ID (e.g., "123_0" -> 123)
+          const videoIdForMutation = getStableId(item);
+          response = previousLiked
+            ? await unlikePropertySaleVideo.mutateAsync(videoIdForMutation)
+            : await likePropertySaleVideo.mutateAsync(videoIdForMutation);
+        }
+
+        // CRITICAL: Sync state from server response - server is the source of truth
+        const serverLikes = response?.likesCount ?? response?.data?.likesCount;
+        if (typeof serverLikes === "number" && !Number.isNaN(serverLikes)) {
+          setLikesCount((m) => ({
+            ...m,
+            [stableId]: Math.max(0, serverLikes)
+          }));
+        }
+
+        // CRITICAL: Update local liked state to match server response
+        // This ensures consistency even if server response differs slightly
+        setLiked((m) => ({ ...m, [stableId]: newLikedState }));
+
+        // Also update query cache to ensure persistence across reloads
+        // The mutations already do this, but we ensure it here too
+      } catch (err: any) {
+        // Rollback on failure (e.g., expired token, network error)
+        setLiked((m) => ({ ...m, [stableId]: previousLiked }));
+        setLikesCount((m) => ({ ...m, [stableId]: prevCount }));
+        setToast({
+          message: t("video.loginToLike", "Please sign in to like videos"),
+          type: "info"
+        });
+      } finally {
+        setLikePending((p) => ({ ...p, [stableId]: false }));
+      }
+    },
+    [
+      user,
+      t,
+      activeTab,
+      like,
+      unlike,
+      likePropertySaleVideo,
+      unlikePropertySaleVideo,
+      triggerAllLikeFx,
+      likesCount
+    ]
+  );
+
+  // Update ref when handleLike changes
+  useEffect(() => {
+    handleLikeRef.current = handleLike;
+  }, [handleLike]);
+
+  const handleSave = (item: VideoType | PropertySaleVideoType) => {
+    // MANDATORY AUTHENTICATION CHECK
+    if (!user || !user.accessToken) {
+      setToast({
+        message: t("video.loginToSave", "Please sign in to save videos"),
+        type: "info"
+      });
+      return;
+    }
+
+    const stableId = getStableId(item);
+    if (savePending[stableId]) return;
+    setSavePending((p) => ({ ...p, [stableId]: true }));
+    const alreadySaved = isVideoSaved(stableId, item);
+    const current = item.savesCount ?? savesCount[stableId] ?? 0; // Ensure we have a valid number
+    const newCount = alreadySaved ? Math.max(0, current - 1) : current + 1;
+    const newSavedState = !alreadySaved;
+
+    // Optimistic update - update local state immediately
+    setSaved((m) => ({ ...m, [stableId]: newSavedState }));
+    setSavesCount((m) => ({ ...m, [stableId]: newCount }));
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(
+      () => {}
+    );
+
+    if (activeTab === "rent") {
+      (alreadySaved
+        ? unsave.mutateAsync((item as any).ID)
+        : save.mutateAsync((item as any).ID)
+      )
+        .then((data) => {
+          // CRITICAL: Sync state from server response - server is the source of truth
+          if (data?.savesCount !== undefined) {
+            setSavesCount((m) => ({ ...m, [stableId]: data.savesCount }));
+          }
+          // CRITICAL: Update local saved state to match server response
+          setSaved((m) => ({ ...m, [stableId]: newSavedState }));
+        })
+        .catch((error) => {
+          // Rollback on error
+          setSaved((m) => ({ ...m, [stableId]: alreadySaved }));
+          setSavesCount((m) => ({ ...m, [stableId]: current }));
+          console.error("Error saving/unsaving video:", error);
+        })
+        .finally(() => setSavePending((p) => ({ ...p, [stableId]: false })));
+    } else {
+      // For property sale videos, use the stableId (already extracted propertySaleID)
+      const videoIdForMutation = stableId;
+      (alreadySaved
+        ? unsavePropertySaleVideo.mutateAsync(videoIdForMutation)
+        : savePropertySaleVideo.mutateAsync(videoIdForMutation)
+      )
+        .then((data) => {
+          // CRITICAL: Sync state from server response - server is the source of truth
+          if (data?.savesCount !== undefined) {
+            setSavesCount((m) => ({ ...m, [stableId]: data.savesCount }));
+          }
+          // CRITICAL: Update local saved state to match server response
+          setSaved((m) => ({ ...m, [stableId]: newSavedState }));
+        })
+        .catch((error) => {
+          // Rollback on error
+          setSaved((m) => ({ ...m, [stableId]: alreadySaved }));
+          setSavesCount((m) => ({ ...m, [stableId]: current }));
+          console.error("Error saving/unsaving property sale video:", error);
+        })
+        .finally(() => setSavePending((p) => ({ ...p, [stableId]: false })));
+    }
+  };
+
+  const handleSubmitReport = async () => {
+    console.log("📝 SUBMITTING VIDEO REPORT:", {
+      reportVideoId,
+      reportReason,
+      reportDescription,
+      user: user?.ID
+    });
+
+    if (!reportVideoId || !reportReason) {
+      console.log("❌ Missing video ID or reason");
+      return;
+    }
+
+    try {
+      console.log("🚀 Calling reportVideo.mutateAsync with:", {
+        videoId: reportVideoId,
+        reason: reportReason,
+        description: reportDescription || ""
+      });
+
+      await reportVideo.mutateAsync({
+        videoId: reportVideoId,
+        reason: reportReason,
+        description: reportDescription || ""
+      });
+
+      console.log("✅ Report submitted successfully");
+
+      // Close modal and reset state
+      setShowReportModal(false);
+      setReportVideoId(null);
+      setReportReason("");
+      setReportDescription("");
+    } catch (error) {
+      console.error("❌ Error submitting report:", error);
+    }
+  };
+
+  const renderItem = ({
+    item,
+    index
+  }: {
+    item: VideoType | PropertySaleVideoType;
+    index: number;
+  }) => {
+    // Safety check: if item is null/undefined, return empty view
+    if (!item || !item.ID) {
+      console.warn(`⚠️ renderItem: Invalid item at index ${index}`);
+      return <View style={styles.page} />;
+    }
+
+    // Default to false - videos should be visible by default, loading state is set explicitly
+    const isVideoLoading = videoLoading[item.ID] ?? false;
+    const thumbnailURL = item.thumbnailURL || (item as any).thumbnail_url;
+
+    // Get agency banner/image for property sale videos poster
+    let posterURL = thumbnailURL;
+    if (
+      activeTab === "sale" &&
+      ("organization" in item || (item as any).propertySale)
+    ) {
+      const org: any = (item as any).organization || {};
+      const psOrg: any = (item as any).propertySale?.organization || {};
+      // Priority: banner_image > logo > logoURL > thumbnail
+      const agencyImage =
+        (psOrg.banner_image &&
+        typeof psOrg.banner_image === "string" &&
+        psOrg.banner_image.trim() !== ""
+          ? psOrg.banner_image
+          : undefined) ||
+        (psOrg.logo &&
+        typeof psOrg.logo === "string" &&
+        psOrg.logo.trim() !== ""
+          ? psOrg.logo
+          : undefined) ||
+        (org.logoURL &&
+        typeof org.logoURL === "string" &&
+        org.logoURL.trim() !== ""
+          ? org.logoURL
+          : undefined);
+
+      if (agencyImage) {
+        posterURL = agencyImage;
+      }
+    }
+
+    const shouldPreload = index <= currentIndex + 1; // Preload current and next video
+
+    // Removed excessive debug logging to prevent spam
+
+    return (
+      <View style={styles.page}>
+        <TouchableOpacity
+          activeOpacity={1}
+          style={styles.fill}
+          onPress={() => handleVideoPress(index)}
+          onLongPress={() => handleVideoTouch(item.ID)}
+        >
+          {/* Thumbnail Preview - Shows while video loads for instant visual feedback */}
+          {isVideoLoading && posterURL && (
+            <Image
+              source={{ uri: posterURL }}
+              style={[
+                styles.thumbnailPreview,
+                { opacity: thumbnailLoaded[item.ID] ? 1 : 0.7 }
+              ]}
+              resizeMode="cover"
+              onLoad={() => {
+                setThumbnailLoaded((prev) => ({ ...prev, [item.ID]: true }));
+              }}
+            />
+          )}
+
+          {/* Loading Skeleton - Fallback if no thumbnail */}
+          {isVideoLoading && !posterURL && (
+            <View style={styles.videoSkeleton}>
+              <Animated.View
+                style={[
+                  styles.videoSkeletonShimmer,
+                  {
+                    opacity: isVideoLoading ? 0.5 : 0
+                  }
+                ]}
+              />
+            </View>
+          )}
+
+          <Video
+            ref={(r) => {
+              videoRefs.current[index] = r;
+              // Mark as ready for preloading if it's an upcoming video
+              if (r && index <= currentIndex + 2) {
+                const stableId = getStableId(item);
+                preloadedVideos.current.add(stableId);
+              }
+            }}
+            source={{ uri: item.videoURL }}
+            style={[styles.video, { opacity: isVideoLoading ? 0.3 : 1 }]}
+            resizeMode={ResizeMode.COVER}
+            shouldPlay={index === currentIndex && !paused[index]}
+            isLooping
+            isMuted={muted}
+            volume={muted ? 0 : 1.0}
+            posterSource={posterURL ? { uri: posterURL } : undefined}
+            usePoster={!!posterURL}
+            useNativeControls={false}
+            onLoadStart={() => {
+              // Set loading to true when video starts loading
+              setVideoLoading((prev) => ({ ...prev, [item.ID]: true }));
+            }}
+            onLoad={(status) => {
+              // Set loading to false when video is loaded
+              setVideoLoading((prev) => ({ ...prev, [item.ID]: false }));
+              handleVideoLoad(item.ID, status);
+
+              // Auto-play immediately when loaded if it's currently the focused video
+              // We check latestIndexRef.current for synchronous truth
+              if (index === latestIndexRef.current && !paused[index]) {
+                const ref = videoRefs.current[index];
+                if (ref) {
+                  ref.playAsync().catch(() => {});
+                }
+              }
+            }}
+            onError={(error) => {
+              const errorCode = (error as any)?.error?.code;
+              const errorDomain = (error as any)?.error?.domain;
+
+              // Log error details for debugging
+              console.error(`❌ Video ${item.ID} error:`, {
+                code: errorCode,
+                domain: errorDomain,
+                error: error
+              });
+
+              // Handle specific error codes
+              // -1013 is NSURLErrorDomain timeout/connection error
+              if (errorCode === -1013 || errorDomain === "NSURLErrorDomain") {
+                console.warn(
+                  `⚠️ Video ${item.ID} network error - will retry on next view`
+                );
+              }
+
+              setVideoLoading((prev) => ({ ...prev, [item.ID]: false }));
+              // Show thumbnail if video fails to load
+              if (posterURL) {
+                setThumbnailLoaded((prev) => ({ ...prev, [item.ID]: true }));
+              }
+            }}
+            onPlaybackStatusUpdate={(status) => {
+              handleVideoProgress(item.ID, status);
+            }}
+            progressUpdateIntervalMillis={1000}
+          />
+
+          {/* Skia Heart Overlay (only if Skia present) */}
+          <Reanimated.View
+            pointerEvents="none"
+            style={[styles.heartOverlayContainer, heartAnimatedStyle]}
+          >
+            <Heart size={140} weight="fill" color="#FF385C" />
+            {particleStyles.map((style, idx) => (
+              <Reanimated.View
+                key={`p-${idx}`}
+                style={[styles.particle, style]}
+              >
+                <View
+                  style={[
+                    styles.particleDot,
+                    {
+                      backgroundColor: particleColorsRef.current[idx],
+                      width: particleSizesRef.current[idx],
+                      height: particleSizesRef.current[idx],
+                      borderRadius: particleSizesRef.current[idx] / 2,
+                      shadowColor: particleColorsRef.current[idx]
+                    }
+                  ]}
+                />
+              </Reanimated.View>
+            ))}
+          </Reanimated.View>
+
+          {/* Play/Pause Icon Overlay */}
+          {paused[index] && (
+            <View style={styles.playIconOverlay}>
+              <Animated.View
+                style={[
+                  styles.playIcon,
+                  { transform: [{ scale: playIconScale }] }
+                ]}
+              >
+                <Play
+                  size={60}
+                  weight="fill"
+                  color="rgba(255, 255, 255, 0.9)"
+                />
+              </Animated.View>
+            </View>
+          )}
+
+          {/* Video Progress Tracker - Always visible for testing */}
+        </TouchableOpacity>
+        <View style={styles.actions}>
+          {/* TikTok-Style Profile Picture with Follow Button (Top of Right Side) - COMPACT */}
+          {activeTab === "sale" &&
+            "organization" in item &&
+            (item as any).organization && (
+              <TouchableOpacity
+                style={styles.tiktokProfileButton}
+                onPress={() => {
+                  // Navigate to organization profile
+                  console.log(
+                    "Navigate to organization:",
+                    (item as any).organization?.id
+                  );
+                }}
+              >
+                <View style={styles.tiktokProfileContainer}>
+                  {(() => {
+                    const org: any = (item as any).organization || {};
+                    const psOrg: any =
+                      (item as any).propertySale?.organization || {};
+                    const imageUri: string | undefined =
+                      (org.logoURL &&
+                      typeof org.logoURL === "string" &&
+                      org.logoURL.trim() !== ""
+                        ? org.logoURL
+                        : undefined) ||
+                      (psOrg.logo &&
+                      typeof psOrg.logo === "string" &&
+                      psOrg.logo.trim() !== ""
+                        ? psOrg.logo
+                        : undefined) ||
+                      (psOrg.banner_image &&
+                      typeof psOrg.banner_image === "string" &&
+                      psOrg.banner_image.trim() !== ""
+                        ? psOrg.banner_image
+                        : undefined);
+
+                    if (imageUri) {
+                      return (
+                        <Image
+                          source={{ uri: imageUri }}
+                          style={styles.tiktokProfileImage}
+                        />
+                      );
+                    }
+
+                    const displayName: string = org.name || psOrg.name || "O";
+                    const initial =
+                      typeof displayName === "string" && displayName.length > 0
+                        ? displayName.charAt(0).toUpperCase()
+                        : "O";
+                    return (
+                      <View style={styles.tiktokProfilePlaceholder}>
+                        <Text style={styles.tiktokProfileInitial}>
+                          {initial}
+                        </Text>
+                      </View>
+                    );
+                  })()}
+                </View>
+              </TouchableOpacity>
+            )}
+
+          {/* Like Button - Always visible for all video types */}
+          {(() => {
+            const stableId = getStableId(item);
+            const likedNow = computeIsLiked(item);
+            const localLiked = liked[stableId];
+            const serverLiked = Boolean((item as any).liked);
+            const heartFilled = likedNow;
+
+            // Log for currently playing video (sale tab)
+            if (activeTab === "sale" && index === currentIndex) {
+              const currentUserId = user?.ID || "NOT_LOGGED_IN";
+              const debugLikedByUserIDs =
+                (item as any).debugLikedByUserIDs || [];
+              const debugCurrentUserID = (item as any).debugCurrentUserID;
+
+              console.log(
+                `❤️ CURRENT VIDEO (Sale) - ID: ${stableId} (${item.ID}):`,
+                {
+                  "Current User ID (Frontend)": currentUserId,
+                  "Current User ID (Server)":
+                    debugCurrentUserID || "NOT_PROVIDED",
+                  "Liked By User IDs": debugLikedByUserIDs,
+                  "Liked State": likedNow ? "✅ TRUE" : "❌ FALSE",
+                  "Heart Status": heartFilled ? "❤️ FILLED" : "🤍 UNFILLED",
+                  "Local State":
+                    localLiked !== undefined
+                      ? localLiked
+                        ? "✅ true"
+                        : "❌ false"
+                      : "⚪ undefined",
+                  "Server State": serverLiked ? "✅ true" : "❌ false",
+                  "Likes Count": likesCount[stableId] ?? item.likesCount ?? 0
+                }
+              );
+
+              // Check if current user ID matches any in the liked list
+              if (
+                Array.isArray(debugLikedByUserIDs) &&
+                debugLikedByUserIDs.length > 0 &&
+                typeof currentUserId === "number"
+              ) {
+                const userInLikedList =
+                  debugLikedByUserIDs.includes(currentUserId);
+                console.log(
+                  `   Match Check: User ${currentUserId} in liked list: ${
+                    userInLikedList ? "✅ YES" : "❌ NO"
+                  }`
+                );
+                if (!userInLikedList && item.likesCount > 0) {
+                  console.log(
+                    `   ⚠️ MISMATCH: User ${currentUserId} is NOT in liked list [${debugLikedByUserIDs.join(
+                      ", "
+                    )}] but count is ${item.likesCount}!`
+                  );
+                }
+              }
+
+              // Additional detailed logging for debugging
+              if (item.likesCount > 0 && !serverLiked) {
+                console.log(
+                  `⚠️ MISMATCH DETECTED: Video has ${item.likesCount} likes but server says user ${currentUserId} has NOT liked it!`
+                );
+                console.log(`   Item data:`, {
+                  ID: item.ID,
+                  propertySaleID: (item as any).propertySaleID,
+                  likesCount: item.likesCount,
+                  serverLiked: (item as any).liked
+                });
+              }
+            }
+
+            return (
+              <TouchableOpacity
+                onPress={() => handleLike(item)}
+                style={[
+                  styles.actionButton,
+                  (!user || !user.accessToken) && styles.actionButtonDisabled
+                ]}
+                disabled={!!likePending[stableId]}
+              >
+                <Animated.View
+                  style={{ transform: [{ scale: getHeartScaleFor(stableId) }] }}
+                >
+                  <Heart
+                    size={36}
+                    weight="fill"
+                    color={
+                      !user || !user.accessToken
+                        ? "rgba(255, 255, 255, 0.5)"
+                        : likedNow
+                        ? "#FF385C"
+                        : "#FFFFFF"
+                    }
+                  />
+                </Animated.View>
+                <Text
+                  style={[
+                    styles.actionText,
+                    (!user || !user.accessToken) && styles.actionTextDisabled
+                  ]}
+                >
+                  {(likesCount[stableId] ?? item.likesCount) || 0}
+                </Text>
+              </TouchableOpacity>
+            );
+          })()}
+
+          {/* Comment Button - Visible for all non-promotional videos */}
+          {!(item as any).isPromotional && (
+            <TouchableOpacity
+              onPress={() => {
+                if (activeTab === "sale") {
+                  // For property sale videos, extract propertySaleID from the string ID (e.g., "123_0" -> 123)
+                  const videoId =
+                    typeof item.ID === "string"
+                      ? parseInt((item.ID as string).split("_")[0])
+                      : (item.ID as number);
+                  (navigation as any).navigate("PropertySaleVideoComments", {
+                    videoId
+                  });
+                } else {
+                  // Regular videos
+                  const videoId =
+                    typeof item.ID === "string"
+                      ? parseInt((item.ID as string).split("_")[0])
+                      : (item.ID as number);
+                  (navigation as any).navigate("VideoComments", { videoId });
+                }
+              }}
+              style={styles.actionButton}
+            >
+              <ChatCircle size={36} weight="fill" color="#FFFFFF" />
+              <Text style={styles.actionText}>{item.commentsCount || 0}</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Share Button - TikTok-style (replaces Save button) */}
+          {!(item as any).isPromotional && (
+            <TouchableOpacity
+              onPress={() => {
+                // Share functionality - can be expanded later
+                handleSave(item);
+              }}
+              style={[
+                styles.actionButton,
+                !user && styles.actionButtonDisabled
+              ]}
+              disabled={!!savePending[getStableId(item)]}
+            >
+              <BookmarkSimpleIcon
+                size={36}
+                weight="fill"
+                //  SHOUDL BE FILLED WITH YELLOW IF SAVED
+                color={
+                  !user
+                    ? "rgba(255, 255, 255, 0.5)"
+                    : saved[getStableId(item)]
+                    ? "#FFC107"
+                    : "#FFFFFF"
+                }
+              />
+              <Text
+                style={[styles.actionText, !user && styles.actionTextDisabled]}
+              >
+                {(() => {
+                  const stableId = getStableId(item);
+                  const count = savesCount[stableId] ?? item.savesCount ?? 0;
+                  return isNaN(count) ? 0 : count;
+                })()}
+              </Text>
+            </TouchableOpacity>
+          )}
+          {/* Music Icon at Bottom (TikTok-style) - COMPACT */}
+          {/* <TouchableOpacity
+            onPress={handleToggleMute}
+            style={styles.tiktokMusicButton}
+          >
+            <View style={styles.tiktokMusicButtonContainer}>
+              <MaterialIcons name="music-note" size={18} color="#FFFFFF" />
+            </View>
+          </TouchableOpacity> */}
+          {/* Download button for promotional videos */}
+          {activeTab === "rent" &&
+            "isPromotional" in item &&
+            (item as any).isPromotional &&
+            (downloadingMap[getStableId(item as any)] ? (
+              <View style={[styles.actionButton, { marginTop: 16 }]}>
+                <View style={styles.downloadMiniCircle}>
+                  <Text style={styles.downloadMiniPercentText}>
+                    {Math.round(
+                      (downloadProgress[getStableId(item as any)] || 0) * 100
+                    )}
+                    %
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                onPress={async () => {
+                  const idNum = getStableId(item as any);
+                  if (downloadingMap[idNum]) return;
+                  try {
+                    setDownloadingMap((p) => ({ ...p, [idNum]: true }));
+                    const perm = await MediaLibrary.requestPermissionsAsync();
+                    if (!perm || perm.status !== "granted") {
+                      setToast({
+                        message: t(
+                          "video.downloadPermission",
+                          "Storage permission is required to save videos"
+                        ),
+                        type: "info"
+                      });
+                      return;
+                    }
+                    const baseDir = ((FileSystem as any).documentDirectory ||
+                      (FileSystem as any).cacheDirectory ||
+                      "") as string;
+                    const nowTs = Date.now();
+                    const fileUri = baseDir + `habitat_${nowTs}_${idNum}.mp4`;
+                    // Use resumable to track progress
+                    const sourceUrl = await getServerWatermarkedUrl(
+                      (item as any).videoURL
+                    );
+                    const resumable = (
+                      FileSystem as any
+                    ).createDownloadResumable(
+                      sourceUrl,
+                      fileUri,
+                      {},
+                      (progress: any) => {
+                        const pct = progress.totalBytesExpectedToWrite
+                          ? progress.totalBytesWritten /
+                            progress.totalBytesExpectedToWrite
+                          : 0;
+                        setDownloadProgress((prev) => ({
+                          ...prev,
+                          [idNum]: Math.max(0, Math.min(1, pct))
+                        }));
+                      }
+                    );
+                    const result = await resumable.downloadAsync();
+                    if (!result || result.status !== 200) {
+                      setToast({
+                        message: t("video.downloadFailed", "Download failed"),
+                        type: "error"
+                      });
+                      return;
+                    }
+                    // Save to media library (into default or Habitat album)
+                    const asset = await (MediaLibrary as any).createAssetAsync(
+                      result.uri
+                    );
+                    try {
+                      const albumName = "Habitat";
+                      let album = await (MediaLibrary as any).getAlbumAsync(
+                        albumName
+                      );
+                      if (!album) {
+                        await (MediaLibrary as any).createAlbumAsync(
+                          albumName,
+                          asset,
+                          false
+                        );
+                      } else {
+                        await (MediaLibrary as any).addAssetsToAlbumAsync(
+                          [asset],
+                          album,
+                          false
+                        );
+                      }
+                    } catch {}
+                    setToast({
+                      message: t("video.downloaded", "Saved to gallery"),
+                      type: "success"
+                    });
+                    // Trigger watermark animation once
+                    setShowWatermark(true);
+                    watermarkTranslateX.setValue(-80);
+                    Animated.timing(watermarkTranslateX, {
+                      toValue: width + 80,
+                      duration: 1400,
+                      useNativeDriver: true,
+                      easing: RNEaseClassic.inOut(RNEaseClassic.cubic)
+                    }).start(() => {
+                      setShowWatermark(false);
+                    });
+                  } catch (e) {
+                    setToast({
+                      message: t("video.downloadFailed", "Download failed"),
+                      type: "error"
+                    });
+                  } finally {
+                    setDownloadingMap((p) => ({ ...p, [idNum]: false }));
+                    setTimeout(
+                      () => setDownloadProgress((p) => ({ ...p, [idNum]: 0 })),
+                      800
+                    );
+                  }
+                }}
+                style={[styles.actionButton, { marginTop: 16 }]}
+              >
+                <MaterialCommunityIcons
+                  name="download"
+                  size={24}
+                  color="#FFFFFF"
+                />
+              </TouchableOpacity>
+            ))}
+          <TouchableOpacity
+            onPress={() => {
+              console.log("🔵 THREE DOTS BUTTON PRESSED for video:", item.ID);
+              setReportVideoId(item.ID);
+              setShowOptionsModal(true);
+              console.log("✅ Options modal should open");
+            }}
+            style={[styles.actionButton, { marginTop: 16 }]}
+          >
+            <MaterialIcons name="more-vert" size={36} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+        {/* Watermark animation overlay (small, left-to-right once) */}
+        {showWatermark && (
+          <Animated.View
+            pointerEvents="none"
+            style={{
+              position: "absolute",
+              bottom: 40,
+              left: 0,
+              transform: [{ translateX: watermarkTranslateX }],
+              flexDirection: "row",
+              alignItems: "center",
+              opacity: 0.9
+            }}
+          >
+            <Image
+              source={require("../assets/logo.png")}
+              style={{ width: 20, height: 20, borderRadius: 6, marginRight: 6 }}
+            />
+            <Text
+              style={{
+                color: "#FFFFFF",
+                fontSize: 12,
+                fontWeight: "700",
+                letterSpacing: 0.5
+              }}
+            >
+              Habitat
+            </Text>
+          </Animated.View>
+        )}
+        {/* Download progress overlay (circular with percent) */}
+        {/* Note: download progress is rendered inline replacing the button */}
+
+        {/* Promotional Video Card - Habitat Branding */}
+        {activeTab === "rent" &&
+          "isPromotional" in item &&
+          (item as any).isPromotional && (
+            <View style={styles.promotionalCard}>
+              {/* <View style={styles.promotionalBadge}>
+              <MaterialCommunityIcons name="play-circle" size={16} color="#FFFFFF" />
+              <Text style={styles.promotionalBadgeText}>Habitat</Text>
+            </View> */}
+              {/* LOGO SMALL SIZED */}
+              <Image
+                source={require("../assets/logo.png")}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 15,
+                  borderWidth: 1,
+                  borderColor: "#FFFFFF",
+                  marginRight: 10
+                }}
+              />
+              <View>
+                <View style={styles.promotionalInfo}>
+                  <Text style={styles.promotionalTitle} numberOfLines={1}>
+                    {(item as any).title || "App Tutorial"}
+                  </Text>
+                </View>
+
+                {(item as any).description && (
+                  <Text style={styles.promotionalDescription} numberOfLines={2}>
+                    {(item as any).description}
+                  </Text>
+                )}
+              </View>
+            </View>
+          )}
+
+        {/* Property Card - Different for rent vs sale (rent always uses original position) */}
+        {activeTab === "rent" &&
+          "property" in item &&
+          item.property &&
+          !(item as any).isPromotional && (
+            <TouchableOpacity
+              style={styles.propertyCardOriginal}
+              onPress={() =>
+                navigation.navigate("PropertyDetails", {
+                  propertyID: item.property?.ID || 0
+                })
+              }
+            >
+              {Array.isArray(item.property.images) &&
+              item.property.images.length > 0 ? (
+                <Image
+                  source={{ uri: item.property.images[0] }}
+                  style={styles.propertyImage}
+                />
+              ) : (
+                <View style={styles.propertyImagePlaceholder} />
+              )}
+              <View style={styles.propertyInfo}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    position: "relative"
+                  }}
+                >
+                  <TranslatedPropertyTitle
+                    title={item.property.title || ""}
+                    style={styles.propertyTitle}
+                  />
+                  <ArrowBendLeftDownIcon
+                    size={12}
+                    style={{ marginRight: 6 }}
+                    color="#717171"
+                  />
+                </View>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    gap: 2,
+                    alignItems: "center",
+                    marginBottom: 2
+                  }}
+                >
+                  <MaterialIcons name="star" size={12} color="#222222" />
+                  <Text style={styles.ratingText}>
+                    {(item as any).rating?.toFixed(1) || "0.0"}
+                  </Text>
+                </View>
+                <Text style={styles.propertyMeta} numberOfLines={1}>
+                  {item.property.city}
+                </Text>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 8,
+                    marginTop: 2
+                  }}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 2
+                    }}
+                  >
+                    <BathtubIcon color={"#717171"} size={14} />
+                    <Text style={styles.propertyMeta} numberOfLines={1}>
+                      {item.property.bathrooms} {t("property.bathroomsShort")}
+                    </Text>
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 2
+                    }}
+                  >
+                    <BedIcon color={"#717171"} size={14} />
+                    <Text style={styles.propertyMeta} numberOfLines={1}>
+                      {item.property.bedrooms} {t("property.bedroomsShort")}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            </TouchableOpacity>
+          )}
+
+        {/* Property Sale Card */}
+        {activeTab === "sale" &&
+          "propertySale" in item &&
+          item.propertySale &&
+          (() => {
+            // Check if there are comments for this property sale video
+            const hasComments = (item.commentsCount ?? 0) > 0;
+            // Dynamic style: if comments exist, use pushed position; otherwise, original position
+            const cardStyle = styles.propertyCardOriginal;
+            return (
+              <TouchableOpacity
+                key={`property-card-${item.ID}`}
+                style={cardStyle}
+                onPress={() =>
+                  navigation.navigate("PropertySaleDetails", {
+                    propertyId: item.propertySale?.id || 0
+                  })
+                }
+              >
+                {Array.isArray(item.propertySale.images) &&
+                item.propertySale.images.length > 0 ? (
+                  <Image
+                    source={{ uri: item.propertySale.images[0] }}
+                    style={styles.propertyImage}
+                  />
+                ) : (
+                  <View style={styles.propertyImagePlaceholder} />
+                )}
+                <View style={styles.propertyInfo}>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      position: "relative",
+                      marginBottom: 2
+                    }}
+                  >
+                    <TranslatedPropertyTitle
+                      title={item.propertySale.title || ""}
+                      style={styles.propertyTitle}
+                    />
+                    <ArrowBendLeftDownIcon
+                      size={12}
+                      style={{ marginRight: 6 }}
+                      color="#717171"
+                    />
+                  </View>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      gap: 2,
+                      alignItems: "center",
+                      marginBottom: 2
+                    }}
+                  >
+                    <Text style={styles.ratingText}>
+                      {item.propertySale.listing_price?.toLocaleString()}{" "}
+                      {t("currency")}
+                    </Text>
+                  </View>
+                  <Text style={styles.propertyMeta} numberOfLines={1}>
+                    {item.propertySale.city}
+                  </Text>
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                      marginTop: 2
+                    }}
+                  >
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 2
+                      }}
+                    >
+                      <BathtubIcon color={"#717171"} size={14} />
+                      <Text style={styles.propertyMeta} numberOfLines={1}>
+                        {item.propertySale.bathrooms}{" "}
+                        {t("property.bathroomsShort")}
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 2
+                      }}
+                    >
+                      <BedIcon color={"#717171"} size={14} />
+                      <Text style={styles.propertyMeta} numberOfLines={1}>
+                        {item.propertySale.bedrooms}{" "}
+                        {t("property.bedroomsShort")}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          })()}
+
+        {/* Sliding Comments for Property Sale Videos - Continuous Wheel Animation */}
+        {/* {activeTab === 'sale' && 'propertySale' in item && item.propertySale && (item.commentsCount ?? 0) > 0 && (
+          <PropertySaleVideoCommentsFeed 
+            propertySaleID={item.propertySale.id} 
+            isVisible={true}
+            currentVideoIndex={currentIndex}
+            videoIndex={index}
+          />
+        )} */}
+      </View>
+    );
+  };
+
+  return (
+    <>
+      {/* TikTok-Style Top Navigation Tabs - Rounded Rectangular Buttons - PERFECTLY CENTERED */}
+      <View style={styles.tiktokTabsContainer}>
+        <View style={styles.tiktokTabsInnerContainer}>
+          <TouchableOpacity
+            style={[
+              styles.tiktokTab,
+              activeTab === "sale" && styles.tiktokActiveTab
+            ]}
+            onPress={() => handleTabChange("sale")}
+          >
+            <Text
+              style={[
+                styles.tiktokTabText,
+                activeTab === "sale" && styles.tiktokActiveTabText
+              ]}
+            >
+              {t("video.propertiesforsale")}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.tiktokTab,
+              activeTab === "rent" && styles.tiktokActiveTab
+            ]}
+            onPress={() => handleTabChange("rent")}
+          >
+            <Text
+              style={[
+                styles.tiktokTabText,
+                activeTab === "rent" && styles.tiktokActiveTabText
+              ]}
+            >
+              {t("video.propertiesforrent")}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={{ flex: 1, backgroundColor: "#000000" }}>
+        <FlatList
+          data={(() => {
+            const rentData =
+              activeTab === "rent"
+                ? rentVideosLoading || isRefreshing
+                  ? Array(3).fill(null)
+                  : accumulatedVideos
+                : saleVideosLoading || isRefreshing
+                ? Array(3).fill(null)
+                : accumulatedSaleVideos;
+
+            // Removed excessive debug logging to prevent spam
+
+            return rentData;
+          })()}
+          renderItem={({ item, index }) =>
+            (activeTab === "rent" ? rentVideosLoading : saleVideosLoading) ||
+            isRefreshing ? (
+              <VideoSkeleton />
+            ) : (
+              renderItem({ item, index })
+            )
+          }
+          keyExtractor={(item, index) =>
+            (activeTab === "rent" ? rentVideosLoading : saleVideosLoading) ||
+            isRefreshing
+              ? `skeleton-${index}`
+              : item?.ID?.toString() || `video-${index}`
+          }
+          pagingEnabled
+          showsVerticalScrollIndicator={false}
+          snapToInterval={PAGE_HEIGHT}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          getItemLayout={(_, index) => ({
+            length: PAGE_HEIGHT,
+            offset: PAGE_HEIGHT * index,
+            index
+          })}
+          removeClippedSubviews={false} // Keep videos mounted for preloading
+          windowSize={5} // Render more videos ahead for preloading
+          initialNumToRender={3} // Render first 3 videos immediately
+          maxToRenderPerBatch={3} // Render 3 at a time for faster loading
+          updateCellsBatchingPeriod={50} // Faster batching for smoother experience
+          onViewableItemsChanged={onViewableItemsChanged}
+          viewabilityConfig={viewabilityConfig as any}
+          extraData={{
+            currentIndex,
+            paused,
+            muted,
+            videoLoading,
+            activeTab
+          }}
+          style={{ height: PAGE_HEIGHT }}
+          onScroll={(e) => {
+            if (showSwipeHint && e?.nativeEvent?.contentOffset?.y > 5) {
+              setShowSwipeHint(false);
+            }
+
+            // Track scroll velocity for analytics (but don't pause videos)
+            const currentY = e.nativeEvent.contentOffset.y;
+            const currentTime = Date.now();
+            const timeDelta = currentTime - lastScrollTime.current;
+            const yDelta = Math.abs(currentY - lastScrollY.current);
+
+            if (timeDelta > 0) {
+              const velocity = yDelta / timeDelta; // pixels per ms
+              scrollVelocityRef.current = velocity;
+            }
+
+            lastScrollY.current = currentY;
+            lastScrollTime.current = currentTime;
+          }}
+          scrollEventThrottle={16}
+          onScrollToIndexFailed={(info) => {
+            // Handle scroll to index failures gracefully
+            console.log("Scroll to index failed:", info);
+          }}
+          onEndReached={() => {
+            // Load more videos using cursor-based pagination
+            if (activeTab === "rent") {
+              if (
+                hasNextRentPage &&
+                !isFetchingNextRentPage &&
+                !rentVideosLoading
+              ) {
+                console.log("📄 Loading next rent videos (cursor-based)...");
+                fetchNextRentPage();
+              }
+            } else {
+              if (
+                hasNextSalePage &&
+                !isFetchingNextSalePage &&
+                !saleVideosLoading
+              ) {
+                console.log("📄 Loading next sale videos (cursor-based)...");
+                fetchNextSalePage();
+              }
+            }
+          }}
+          onEndReachedThreshold={0.5}
+        />
+
+        {showSwipeHint && (
+          <View pointerEvents="none" style={styles.swipeHintContainer}>
+            <LottieView
+              source={require("../assets/lotties/swipe-up.json")}
+              autoPlay
+              loop
+              style={styles.swipeHintLottie}
+            />
+            <Text style={styles.swipeHintText}>
+              {t("video.swipeDownHint", "Scroll down to explore")}
+            </Text>
+          </View>
+        )}
+      </View>
+
+      {/* Comments handled by VideoComments stack screen (formSheet) */}
+
+      {/* Video Options Modal */}
+      <Modal
+        visible={showOptionsModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowOptionsModal(false);
+          setReportVideoId(null);
+        }}
+      >
+        <View style={styles.optionsModalContainer}>
+          <TouchableOpacity
+            style={styles.optionsBackdrop}
+            activeOpacity={1}
+            onPress={() => {
+              setShowOptionsModal(false);
+              setReportVideoId(null);
+            }}
+          />
+          <View style={styles.optionsModalSheet}>
+            <View style={styles.optionsHeader}>
+              <Text style={styles.optionsTitle}>{t("video.reportVideo")}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowOptionsModal(false);
+                  setReportVideoId(null);
+                }}
+                style={styles.optionsCloseButton}
+              >
+                <MaterialCommunityIcons name="close" size={20} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.optionsContent}>
+              <TouchableOpacity
+                style={styles.optionsItem}
+                onPress={() => {
+                  console.log("🚩 REPORT VIDEO BUTTON PRESSED");
+                  console.log("Current reportVideoId:", reportVideoId);
+                  setShowOptionsModal(false);
+                  setShowReportModal(true);
+                  console.log(
+                    "✅ Options modal closed, report modal should open"
+                  );
+                }}
+              >
+                <View style={styles.optionsIconContainer}>
+                  <MaterialCommunityIcons
+                    name="flag"
+                    size={24}
+                    color="#FF385C"
+                  />
+                </View>
+                <View style={styles.optionsTextContainer}>
+                  <Text style={styles.optionsItemTitle}>
+                    {t("video.reportVideo")}
+                  </Text>
+                  <Text style={styles.optionsItemSubtitle}>
+                    Report inappropriate content
+                  </Text>
+                </View>
+                <MaterialCommunityIcons
+                  name="chevron-right"
+                  size={20}
+                  color="#8E8E93"
+                />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.optionsItem}
+                onPress={() => {
+                  setShowOptionsModal(false);
+                  setShowHideModal(true);
+                }}
+              >
+                <View style={styles.optionsIconContainer}>
+                  <MaterialCommunityIcons
+                    name="eye-off"
+                    size={24}
+                    color="#8E8E93"
+                  />
+                </View>
+                <View style={styles.optionsTextContainer}>
+                  <Text style={styles.optionsItemTitle}>
+                    {t("video.hideVideo")}
+                  </Text>
+                  <Text style={styles.optionsItemSubtitle}>
+                    Hide this video from your feed
+                  </Text>
+                </View>
+                <MaterialCommunityIcons
+                  name="chevron-right"
+                  size={20}
+                  color="#8E8E93"
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Video Report Modal */}
+      <Modal
+        visible={showReportModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowReportModal(false);
+          setReportVideoId(null);
+          setReportReason("");
+          setReportDescription("");
+        }}
+      >
+        <View style={styles.reportModalContainer}>
+          <TouchableOpacity
+            style={styles.reportBackdrop}
+            activeOpacity={1}
+            onPress={() => {
+              setShowReportModal(false);
+              setReportVideoId(null);
+              setReportReason("");
+              setReportDescription("");
+            }}
+          />
+          <View
+            style={[
+              styles.reportModalSheet,
+              keyboardVisible && styles.reportModalSheetKeyboard
+            ]}
+          >
+            <View style={styles.reportHeader}>
+              <Text style={styles.reportTitle}>{t("video.reportVideo")}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowReportModal(false);
+                  setReportVideoId(null);
+                  setReportReason("");
+                  setReportDescription("");
+                }}
+                style={styles.reportCloseButton}
+              >
+                <MaterialCommunityIcons name="close" size={20} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={styles.reportContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.reportContentContainer}
+            >
+              <Text style={styles.reportSubtitle}>
+                {t("video.reportReason")}
+              </Text>
+
+              {/* Report Reasons */}
+              <View style={styles.reportReasons}>
+                {[
+                  {
+                    key: "inappropriate",
+                    label: t("video.reportInappropriate")
+                  },
+                  { key: "spam", label: t("video.reportSpam") },
+                  { key: "harassment", label: t("video.reportHarassment") },
+                  { key: "violence", label: t("video.reportViolence") },
+                  { key: "fake", label: t("video.reportFake") },
+                  { key: "other", label: t("video.reportOther") }
+                ].map((reason) => (
+                  <TouchableOpacity
+                    key={reason.key}
+                    style={[
+                      styles.reportReasonItem,
+                      reportReason === reason.key && styles.reportReasonSelected
+                    ]}
+                    onPress={() => setReportReason(reason.key)}
+                  >
+                    <View style={styles.reportReasonRadio}>
+                      {reportReason === reason.key && (
+                        <View style={styles.reportReasonRadioSelected} />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.reportReasonText,
+                        reportReason === reason.key &&
+                          styles.reportReasonTextSelected
+                      ]}
+                    >
+                      {reason.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Additional Description */}
+              <Text style={styles.reportSubtitle}>
+                {t("video.reportDescription")}
+              </Text>
+              <View style={styles.reportTextInputContainer}>
+                <TextInput
+                  value={reportDescription}
+                  onChangeText={setReportDescription}
+                  placeholder={t("video.reportDescriptionPlaceholder")}
+                  placeholderTextColor="#8E8E93"
+                  style={styles.reportTextInput}
+                  multiline
+                  numberOfLines={3}
+                  maxLength={500}
+                  returnKeyType="done"
+                  blurOnSubmit={true}
+                />
+              </View>
+
+              {/* Submit Report Button */}
+              <TouchableOpacity
+                style={[
+                  styles.reportSubmitButton,
+                  !reportReason && styles.reportSubmitButtonDisabled
+                ]}
+                disabled={!reportReason}
+                onPress={async () => {
+                  try {
+                    console.log("🔥 SUBMIT BUTTON PRESSED!");
+                    console.log("Button disabled?", !reportReason);
+                    console.log("Report reason:", reportReason);
+                    console.log("Report video ID:", reportVideoId);
+
+                    if (!reportReason) {
+                      console.log("❌ Button is disabled - no reason selected");
+                      return;
+                    }
+
+                    console.log(
+                      "✅ Button should work - calling submit function"
+                    );
+
+                    // Test if we can reach this point
+                    console.log("🔍 Testing function execution...");
+
+                    // Test if reportVideo mutation exists
+                    console.log("🔍 reportVideo mutation:", reportVideo);
+                    console.log(
+                      "🔍 reportVideo.mutateAsync:",
+                      reportVideo?.mutateAsync
+                    );
+
+                    // Call the function directly instead
+                    console.log("📝 SUBMITTING VIDEO REPORT:", {
+                      reportVideoId,
+                      reportReason,
+                      reportDescription,
+                      user: user?.ID
+                    });
+
+                    if (!reportVideoId || !reportReason) {
+                      console.log("❌ Missing video ID or reason");
+                      return;
+                    }
+
+                    console.log("🚀 About to call reportVideo.mutateAsync...");
+
+                    const result = await reportVideo.mutateAsync({
+                      videoId: reportVideoId,
+                      reason: reportReason,
+                      description: reportDescription || ""
+                    });
+
+                    console.log(
+                      "✅ Report submitted successfully! Result:",
+                      result
+                    );
+                    // Optimistic update handled in mutation; show toast
+                    setToast({
+                      message: t(
+                        "video.reportSuccess",
+                        "Thanks. This video was reported and will no longer appear in your feed."
+                      ),
+                      type: "success"
+                    });
+
+                    // Close modal and reset state
+                    setShowReportModal(false);
+                    setReportVideoId(null);
+                    setReportReason("");
+                    setReportDescription("");
+                  } catch (error) {
+                    console.error("❌ CRITICAL ERROR in submit button:", error);
+                    console.error(
+                      "❌ Error details:",
+                      JSON.stringify(error, null, 2)
+                    );
+                  }
+                }}
+              >
+                <Text style={styles.reportSubmitText}>
+                  {t("video.submitReport")}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Toast */}
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          duration={2500}
+          onHide={() => setToast(null)}
+        />
+      )}
+
+      {/* Hide Video Modal */}
+      <Modal
+        visible={showHideModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setShowHideModal(false);
+          setReportVideoId(null);
+          setReportReason("");
+        }}
+      >
+        <View style={styles.hideModalContainer}>
+          <TouchableOpacity
+            style={styles.hideBackdrop}
+            activeOpacity={1}
+            onPress={() => {
+              setShowHideModal(false);
+              setReportVideoId(null);
+              setReportReason("");
+            }}
+          />
+          <View style={styles.hideModalSheet}>
+            <View style={styles.hideHeader}>
+              <Text style={styles.hideTitle}>{t("video.hideVideo")}</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowHideModal(false);
+                  setReportVideoId(null);
+                  setReportReason("");
+                }}
+                style={styles.hideCloseButton}
+              >
+                <MaterialCommunityIcons name="close" size={20} color="#000" />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.hideContent}>
+              <View style={styles.hideIconContainer}>
+                <MaterialCommunityIcons
+                  name="eye-off"
+                  size={48}
+                  color="#8E8E93"
+                />
+              </View>
+
+              <Text style={styles.hideSubtitle}>
+                Why are you hiding this video?
+              </Text>
+
+              {/* Hide Reasons */}
+              <View style={styles.hideReasons}>
+                {[
+                  { key: "not_interested", label: "Not interested" },
+                  { key: "inappropriate", label: "Inappropriate content" },
+                  { key: "spam", label: "Spam or misleading" },
+                  { key: "repetitive", label: "Repetitive content" },
+                  { key: "other", label: "Other" }
+                ].map((reason) => (
+                  <TouchableOpacity
+                    key={reason.key}
+                    style={[
+                      styles.hideReasonItem,
+                      reportReason === reason.key && styles.hideReasonSelected
+                    ]}
+                    onPress={() => setReportReason(reason.key)}
+                  >
+                    <View style={styles.hideReasonRadio}>
+                      {reportReason === reason.key && (
+                        <View style={styles.hideReasonRadioSelected} />
+                      )}
+                    </View>
+                    <Text
+                      style={[
+                        styles.hideReasonText,
+                        reportReason === reason.key &&
+                          styles.hideReasonTextSelected
+                      ]}
+                    >
+                      {reason.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Hide Button */}
+              <TouchableOpacity
+                style={[
+                  styles.hideSubmitButton,
+                  !reportReason && styles.hideSubmitButtonDisabled
+                ]}
+                disabled={!reportReason}
+                onPress={async () => {
+                  console.log("👁️ HIDING VIDEO FROM FEED:", {
+                    reportVideoId,
+                    reportReason
+                  });
+
+                  if (reportVideoId) {
+                    try {
+                      await hideVideo.mutateAsync({
+                        videoId: reportVideoId,
+                        reason: reportReason
+                      });
+                      console.log("✅ Video hidden successfully");
+                      // Optimistic update handled in mutation; show toast
+                      setToast({
+                        message: t(
+                          "video.hideSuccess",
+                          "Hidden. This video will not appear in your feed again."
+                        ),
+                        type: "success"
+                      });
+                    } catch (error) {
+                      console.error("❌ Error hiding video:", error);
+                    }
+                  }
+                  setShowHideModal(false);
+                  setReportVideoId(null);
+                  setReportReason("");
+                }}
+              >
+                <MaterialCommunityIcons
+                  name="eye-off"
+                  size={20}
+                  color="#FFFFFF"
+                />
+                <Text style={styles.hideSubmitText}>
+                  {t("video.hideVideo")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+};
+
+const styles = StyleSheet.create({
+  page: {
+    height: height - 80,
+    width,
+    backgroundColor: "#000",
+    overflow: "hidden"
+  },
+  fill: { flex: 1 },
+  video: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0
+  },
+  actions: {
+    position: "absolute",
+    right: 12,
+    bottom: 60, // Adjusted for TikTok-style layout
+    alignItems: "center",
+    gap: 8, // COMPACT spacing - TikTok-style tight spacing
+    zIndex: 10
+  },
+  actionButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 0,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    minWidth: 44,
+    minHeight: 44
+  },
+  actionText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 2, // TIGHT spacing between icon and text
+    textShadowColor: "rgba(0, 0, 0, 0.9)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+    letterSpacing: 0.2
+  },
+  actionButtonDisabled: {
+    opacity: 0.6
+  },
+  actionTextDisabled: {
+    color: "rgba(255, 255, 255, 0.5)"
+  },
+  propertyCard: {
+    position: "absolute",
+    left: 12,
+    bottom: 24, // Original position for rent videos and sale videos without comments
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 10,
+    padding: 8,
+    maxWidth: width * 0.65
+  },
+  propertyCardOriginal: {
+    position: "absolute",
+    left: 12,
+    bottom: 24, // Original position when no comments
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: 10,
+    padding: 8,
+    maxWidth: width * 0.65
+  },
+  propertyCardWithComments: {
+    position: "absolute",
+    left: 12,
+    // bottom: 70, // Pushed down significantly for professional spacing
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.96)",
+    borderRadius: 12, // Professional rounded corners
+    padding: 8, // Balanced padding
+    maxWidth: width * 0.68, // Slightly wider for better readability
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  commentsFeedContainer: {
+    position: "absolute",
+    left: 12,
+    bottom: 12, // Professional padding from edge
+    right: 12,
+    height: 138, // Professional height: space between bottom: 12 and property card at bottom: 150
+    overflow: "hidden", // Hide comments that slide out at top
+    pointerEvents: "none" // Don't block video interactions
+  },
+  commentsFeedContainerHorizontal: {
+    position: "absolute",
+    top: 60, // Pushed down for better visibility
+    left: 0,
+    right: 0,
+    height: 60, // Height for 2-line comments
+    overflow: "hidden", // Hide comments that slide out at left
+    pointerEvents: "none" // Don't block video interactions
+  },
+  commentCardHorizontal: {
+    backgroundColor: "rgba(0,0,0,0.75)", // Professional semi-transparent black
+    borderRadius: 20, // Pill-shaped for horizontal flow
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    minWidth: 140, // Minimum width for readability
+    maxWidth: width * 0.55, // Maximum width for 2-line text
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    elevation: 4,
+    justifyContent: "center",
+    alignItems: "flex-start"
+  },
+  commentTextHorizontal: {
+    fontSize: 12,
+    color: "#FFFFFF",
+    lineHeight: 16,
+    fontWeight: "500",
+    letterSpacing: -0.1,
+    textAlign: "left"
+  },
+  commentCard: {
+    backgroundColor: "rgba(0,0,0,0.65)", // Professional semi-transparent black
+    borderRadius: 8, // Professional rounded corners
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    maxWidth: width * 0.42, // Professional width for readability
+    width: width * 0.42,
+    minHeight: 28, // Professional min height
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2
+  },
+  commentCardContent: {
+    gap: 1 // Ultra compact spacing
+  },
+  commentUserName: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.9)", // Compact white
+    marginBottom: 0,
+    lineHeight: 12,
+    letterSpacing: -0.15
+  },
+  commentText: {
+    fontSize: 10,
+    color: "#FFFFFF", // Compact bright white
+    lineHeight: 12,
+    fontWeight: "500",
+    letterSpacing: -0.1
+  },
+  commentTime: {
+    fontSize: 8,
+    color: "rgba(255,255,255,0.55)", // Compact gray
+    marginTop: 1,
+    fontWeight: "400"
+  },
+  propertyImage: {
+    width: 70, // Smaller image (was 100)
+    height: 70, // Smaller image (was 100)
+    borderRadius: 6 // Smaller radius
+  },
+  propertyImagePlaceholder: {
+    width: 70, // Match image size (was 77)
+    height: 70, // Match image size (was 77)
+    borderRadius: 6, // Smaller radius
+    backgroundColor: "#EAEAEA"
+  },
+  propertyInfo: {
+    marginLeft: 6, // Less margin (was 8)
+    maxWidth: width * 0.5 // Smaller max width (was 0.6)
+  },
+  translationIconContainer: {
+    position: "absolute",
+    top: -8,
+    right: 0,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    padding: 4,
+    shadowColor: "#00A699",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+    zIndex: 10,
+    borderWidth: 1.5,
+    borderColor: "#00A699"
+  },
+  propertyTitle: {
+    color: "#222222",
+    fontWeight: "600", // Slightly lighter (was 700)
+    fontSize: 12, // Smaller font (was 14)
+    width: 110 // Smaller width (was 140)
+  },
+  propertyMeta: {
+    color: "#717171",
+    fontSize: 11 // Smaller font (was default)
+  },
+  ratingText: {
+    color: "#222222",
+    fontSize: 12, // Smaller font (was 14)
+    fontWeight: "600"
+  },
+  tiktokModalContainer: {
+    flex: 1,
+    justifyContent: "flex-end"
+  },
+  tiktokBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.3)"
+  },
+  tiktokCommentsSheet: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    height: height * 0.65,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 8
+  },
+  tiktokCommentsSheetKeyboard: {
+    height: height * 0.9
+  },
+  tiktokHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#E5E5EA"
+  },
+  tiktokDragHandle: {
+    width: 36,
+    height: 4,
+    backgroundColor: "#C7C7CC",
+    borderRadius: 2,
+    position: "absolute",
+    top: 4,
+    left: "50%",
+    marginLeft: -18
+  },
+  tiktokCommentsCount: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000000",
+    flex: 1,
+    textAlign: "center"
+  },
+  tiktokCloseButton: {
+    padding: 4
+  },
+  tiktokCommentsList: {
+    flex: 1,
+    backgroundColor: "#FFFFFF"
+  },
+  tiktokCommentsContent: {
+    paddingBottom: 20
+  },
+  tiktokEmptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 60
+  },
+  tiktokEmptyText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000000",
+    marginTop: 12,
+    marginBottom: 4
+  },
+  tiktokEmptySubtext: {
+    fontSize: 14,
+    color: "#8E8E93"
+  },
+  tiktokReplyBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: "#F2F2F7",
+    borderTopWidth: 0.5,
+    borderTopColor: "#E5E5EA"
+  },
+  tiktokReplyInfo: {
+    flex: 1
+  },
+  tiktokReplyText: {
+    fontSize: 14,
+    color: "#000000",
+    fontWeight: "500"
+  },
+  tiktokCancelReply: {
+    padding: 4
+  },
+  tiktokInputContainer: {
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 0.5,
+    borderTopColor: "#E5E5EA",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingBottom: 20
+  },
+  tiktokInputRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    backgroundColor: "#F2F2F7",
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 40
+  },
+  tiktokUserAvatar: {
+    marginRight: 8
+  },
+  tiktokInputWrapper: {
+    flex: 1,
+    paddingVertical: 4
+  },
+  tiktokTextInput: {
+    fontSize: 15,
+    color: "#000000",
+    maxHeight: 100,
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+    lineHeight: 20
+  },
+  tiktokActionButtons: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 8
+  },
+  tiktokActionButton: {
+    padding: 6,
+    marginHorizontal: 2
+  },
+  tiktokSendButton: {
+    backgroundColor: "#FF385C",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: 8,
+    shadowColor: "#FF385C",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  tiktokSignInPrompt: {
+    backgroundColor: "#F2F2F7",
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginHorizontal: 4
+  },
+  tiktokSignInContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  tiktokSignInText: {
+    fontSize: 15,
+    color: "#8E8E93",
+    marginLeft: 8,
+    marginRight: 8,
+    fontWeight: "500"
+  },
+  // Skeleton Loading Styles
+  skeletonContainer: {
+    height: height,
+    width: width,
+    backgroundColor: "#000"
+  },
+  skeletonVideo: {
+    flex: 1,
+    backgroundColor: "#1a1a1a",
+    marginBottom: 20
+  },
+  skeletonContent: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    padding: 20,
+    backgroundColor: "transparent"
+  },
+  skeletonHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20
+  },
+  skeletonAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#2a2a2a",
+    marginRight: 12
+  },
+  skeletonTextContainer: {
+    flex: 1
+  },
+  skeletonText: {
+    backgroundColor: "#2a2a2a",
+    borderRadius: 4,
+    marginBottom: 8
+  },
+  skeletonTitle: {
+    height: 16,
+    width: "70%"
+  },
+  skeletonSubtitle: {
+    height: 12,
+    width: "50%"
+  },
+  skeletonActions: {
+    flexDirection: "row",
+    justifyContent: "space-around",
+    alignItems: "center"
+  },
+  skeletonActionButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "#2a2a2a"
+  },
+  // Individual Video Skeleton Styles
+  videoSkeleton: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#1a1a1a",
+    zIndex: 1
+  },
+  videoSkeletonShimmer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#2a2a2a"
+  },
+  thumbnailPreview: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 2,
+    backgroundColor: "#000"
+  },
+  // Clean Professional Dropdown Styles
+  dropdownButtonContainer: {
+    position: "absolute",
+    top: 50,
+    right: 20,
+    zIndex: 1000
+  },
+  dropdownButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.7)",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)"
+  },
+  dropdownButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "500",
+    marginRight: 4
+  },
+  dropdownOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "flex-start",
+    alignItems: "flex-end",
+    paddingTop: 100,
+    paddingRight: 20
+  },
+  dropdownContainer: {
+    backgroundColor: "rgba(0, 0, 0, 0.9)",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.1)",
+    minWidth: 160,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8
+  },
+  dropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255, 255, 255, 0.1)"
+  },
+  dropdownItemSelected: {
+    backgroundColor: "rgba(255, 56, 92, 0.1)"
+  },
+  dropdownItemText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "400"
+  },
+  dropdownItemTextSelected: {
+    color: "#FF385C",
+    fontWeight: "500"
+  },
+  // Comments Loading State Styles
+  tiktokLoadingState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: 40
+  },
+  tiktokLoadingText: {
+    color: "#8E8E93",
+    fontSize: 14,
+    marginTop: 8
+  },
+  // Video Progress Tracker Styles
+  progressTrackerContainer: {
+    position: "absolute",
+    bottom: 100,
+    left: 20,
+    right: 20,
+    backgroundColor: "rgba(0, 0, 0, 0.9)",
+    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    zIndex: 1000
+  },
+  progressBarContainer: {
+    marginBottom: 8
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.3)",
+    borderRadius: 2,
+    position: "relative"
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: "#FF385C",
+    borderRadius: 2
+  },
+  progressThumb: {
+    position: "absolute",
+    top: -6,
+    width: 16,
+    height: 16,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: "#FF385C",
+    marginLeft: -8
+  },
+  timeDisplay: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  timeText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "600",
+    fontFamily: "monospace"
+  },
+  timeSeparator: {
+    color: "rgba(255, 255, 255, 0.6)",
+    fontSize: 16,
+    fontWeight: "400",
+    marginHorizontal: 8
+  },
+  debugText: {
+    color: "rgba(255, 255, 255, 0.7)",
+    fontSize: 12,
+    marginTop: 4,
+    textAlign: "center"
+  },
+  // Play Icon Overlay Styles
+  playIconOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    zIndex: 100
+  },
+  playIcon: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.5,
+    shadowRadius: 8,
+    elevation: 8
+  },
+  heartOverlayContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  downloadOverlay: {
+    position: "absolute",
+    alignSelf: "center",
+    top: height * 0.35,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000
+  },
+  downloadMiniCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderWidth: 2,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  downloadMiniPercentText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 11
+  },
+  downloadCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  downloadPercentText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 16
+  },
+  downloadLabel: {
+    marginTop: 8,
+    color: "#FFFFFF",
+    fontSize: 13
+  },
+  heartCanvas: {
+    width: 180,
+    height: 180
+  },
+  particle: {
+    position: "absolute",
+    width: 8,
+    height: 8,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  particleDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#FF385C",
+    shadowColor: "#FF385C",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.4,
+    shadowRadius: 4,
+    elevation: 3
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#000"
+  },
+  emptyText: {
+    fontSize: 18,
+    color: "#999",
+    marginTop: 16,
+    fontFamily: "CircularStd-Medium"
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: "#666",
+    marginTop: 8,
+    fontFamily: "CircularStd-Book"
+  },
+  // Video Report Modal Styles
+  reportModalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  reportBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  reportModalSheet: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    width: width * 0.9,
+    maxWidth: 400,
+    height: height * 0.7,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 12
+  },
+  reportModalSheetKeyboard: {
+    height: height * 0.9
+  },
+  reportHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5EA"
+  },
+  reportTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#000000",
+    flex: 1,
+    textAlign: "center"
+  },
+  reportCloseButton: {
+    padding: 4
+  },
+  reportContent: {
+    flex: 1,
+    minHeight: 0 // Important for flex shrinking
+  },
+  reportContentContainer: {
+    padding: 20,
+    paddingBottom: 40,
+    flexGrow: 1
+  },
+  reportSubtitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000000",
+    marginBottom: 12,
+    marginTop: 16
+  },
+  reportReasons: {
+    marginBottom: 20,
+    flexShrink: 0 // Prevent shrinking
+  },
+  reportReasonItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: "#F8F9FA",
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "transparent"
+  },
+  reportReasonSelected: {
+    backgroundColor: "#FFF5F5",
+    borderColor: "#FF385C"
+  },
+  reportReasonRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#D1D5DB",
+    marginRight: 12,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  reportReasonRadioSelected: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#FF385C"
+  },
+  reportReasonText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#374151",
+    flex: 1
+  },
+  reportReasonTextSelected: {
+    color: "#FF385C",
+    fontWeight: "600"
+  },
+  reportTextInputContainer: {
+    marginBottom: 20,
+    flexShrink: 0 // Prevent shrinking
+  },
+  reportTextInput: {
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 15,
+    color: "#000000",
+    backgroundColor: "#F8F9FA",
+    textAlignVertical: "top",
+    minHeight: 100,
+    maxHeight: 120
+  },
+  reportActions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginVertical: 20,
+    gap: 12
+  },
+  reportActionButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: "#F8F9FA",
+    borderWidth: 1,
+    borderColor: "#E5E7EB"
+  },
+  reportActionText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#374151",
+    marginLeft: 8
+  },
+  reportSubmitButton: {
+    backgroundColor: "#FF385C",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    marginTop: 8,
+    shadowColor: "#FF385C",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4
+  },
+  reportSubmitButtonDisabled: {
+    backgroundColor: "#D1D5DB",
+    shadowOpacity: 0,
+    elevation: 0
+  },
+  reportSubmitText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFFFFF"
+  },
+  // Video Options Modal Styles
+  optionsModalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  optionsBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  optionsModalSheet: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    width: width * 0.9,
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 12
+  },
+  optionsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5EA"
+  },
+  optionsTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#000000",
+    flex: 1,
+    textAlign: "center"
+  },
+  optionsCloseButton: {
+    padding: 4
+  },
+  optionsContent: {
+    padding: 20
+  },
+  optionsItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: "#F8F9FA",
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB"
+  },
+  optionsIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  optionsTextContainer: {
+    flex: 1
+  },
+  optionsItemTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000000",
+    marginBottom: 2
+  },
+  optionsItemSubtitle: {
+    fontSize: 14,
+    color: "#8E8E93"
+  },
+  // Hide Video Modal Styles
+  hideModalContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  hideBackdrop: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(0,0,0,0.5)"
+  },
+  hideModalSheet: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    width: width * 0.9,
+    maxWidth: 400,
+    maxHeight: height * 0.8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 12
+  },
+  hideHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5EA"
+  },
+  hideTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#000000",
+    flex: 1,
+    textAlign: "center"
+  },
+  hideCloseButton: {
+    padding: 4
+  },
+  hideContent: {
+    padding: 20,
+    alignItems: "center"
+  },
+  hideIconContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "#F8F9FA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 20
+  },
+  hideSubtitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#000000",
+    marginBottom: 20,
+    textAlign: "center"
+  },
+  hideReasons: {
+    width: "100%",
+    marginBottom: 20
+  },
+  hideReasonItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: "#F8F9FA",
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "transparent"
+  },
+  hideReasonSelected: {
+    backgroundColor: "#FFF5F5",
+    borderColor: "#FF385C"
+  },
+  hideReasonRadio: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: "#D1D5DB",
+    marginRight: 12,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  hideReasonRadioSelected: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#FF385C"
+  },
+  hideReasonText: {
+    fontSize: 15,
+    fontWeight: "500",
+    color: "#374151",
+    flex: 1
+  },
+  hideReasonTextSelected: {
+    color: "#FF385C",
+    fontWeight: "600"
+  },
+  hideSubmitButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#8E8E93",
+    paddingVertical: 16,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    width: "100%",
+    shadowColor: "#8E8E93",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4
+  },
+  hideSubmitButtonDisabled: {
+    backgroundColor: "#D1D5DB",
+    shadowOpacity: 0,
+    elevation: 0
+  },
+  hideSubmitText: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    marginLeft: 8
+  },
+  // TikTok-Style Tab styles - Rounded Rectangular Buttons - PERFECTLY CENTERED
+  tiktokTabsContainer: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 50 : 40,
+    left: 0,
+    right: 0,
+    backgroundColor: "transparent",
+    zIndex: 1000,
+    height: 50,
+    justifyContent: "center", // CENTER vertically
+    alignItems: "center" // CENTER horizontally
+  },
+  tiktokTabsInnerContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center", // CENTER the tabs
+    gap: 8
+  },
+  tiktokTab: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 20,
+    minWidth: 80
+  },
+  tiktokActiveTab: {
+    borderColor: "#FFFFFF",
+    borderBottomWidth: 2
+  },
+  tiktokTabText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#FAFAFA"
+  },
+  tiktokActiveTabText: {
+    color: "#FFFFFF",
+    fontWeight: "700"
+  },
+  // Tab styles - Compact, centered, professional (kept for backward compatibility)
+  tabsContainer: {
+    position: "absolute",
+    top: 50,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    backgroundColor: "transparent",
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    zIndex: 1000,
+    justifyContent: "center",
+    alignItems: "center"
+  },
+  tab: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+    marginHorizontal: 4,
+    borderRadius: 6
+  },
+  activeTab: {
+    backgroundColor: "transparent",
+    borderBottomWidth: 2,
+    borderBottomColor: "#FFFFFF"
+  },
+  tabText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "rgba(255, 255, 255, 0.7)"
+  },
+  activeTabText: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 12
+  },
+  // Organization profile styles
+  organizationProfile: {
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  organizationLogo: {
+    width: 45,
+    height: 45,
+    borderRadius: 25,
+    borderWidth: 2,
+    borderColor: "#FFFFFF"
+  },
+  organizationLogoPlaceholder: {
+    width: 45,
+    height: 45,
+    borderRadius: 25,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF"
+  },
+  organizationInitials: {
+    color: "#FFFFFF",
+    fontSize: 18,
+    fontWeight: "bold"
+  },
+  // TikTok-Style Profile Button - COMPACT
+  tiktokProfileButton: {
+    marginBottom: 8 // REDUCED from 20 to 8
+  },
+  tiktokProfileContainer: {
+    position: "relative",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  tiktokProfileImage: {
+    width: 44, // REDUCED from 48
+    height: 44, // REDUCED from 48
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: "#FFFFFF"
+  },
+  tiktokProfilePlaceholder: {
+    width: 44, // REDUCED from 48
+    height: 44, // REDUCED from 48
+    borderRadius: 22,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#FFFFFF"
+  },
+  tiktokProfileInitial: {
+    color: "#FFFFFF",
+    fontSize: 18, // REDUCED from 20
+    fontWeight: "bold"
+  },
+  tiktokFollowBadge: {
+    position: "absolute",
+    bottom: -1,
+    right: -1,
+    width: 18, // REDUCED from 20
+    height: 18, // REDUCED from 20
+    borderRadius: 9,
+    backgroundColor: "#FF385C",
+    borderWidth: 2,
+    borderColor: "#000000",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  // TikTok-Style Music Button - COMPACT
+  tiktokMusicButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 0 // REMOVED extra margin
+  },
+  tiktokMusicButtonContainer: {
+    width: 44, // REDUCED from 48
+    height: 44, // REDUCED from 48
+    borderRadius: 22,
+    backgroundColor: "rgba(0, 0, 0, 0.3)",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.3)"
+  },
+  // Swipe hint overlay
+  swipeHintContainer: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    backgroundColor: "transparent"
+  },
+  swipeHintLottie: {
+    width: 300,
+    height: 300,
+    backgroundColor: "transparent"
+  },
+  swipeHintText: {
+    color: "#FFFFFF",
+    marginTop: 8,
+    fontSize: 14,
+    opacity: 0.95
+  },
+  // Promotional Video Styles
+  promotionalCard: {
+    position: "absolute",
+    left: 12,
+    bottom: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 16,
+    padding: 10
+  },
+  promotionalBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FF5A5F",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    alignSelf: "flex-start",
+    marginBottom: 8
+  },
+  promotionalBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "700",
+    marginLeft: 4,
+    letterSpacing: 0.5
+  },
+  promotionalInfo: {
+    flex: 1
+  },
+  promotionalTitle: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700"
+  },
+  promotionalDescription: {
+    color: "rgba(255, 255, 255, 0.8)",
+    fontSize: 13,
+    lineHeight: 18
+  },
+  // TikTok-Style Bottom-Left Content Area
+  tiktokBottomContent: {
+    position: "absolute",
+    left: 12,
+    bottom: 80,
+    right: 80, // Leave space for right-side actions
+    zIndex: 10
+  },
+  tiktokUsernameContainer: {
+    marginBottom: 8
+  },
+  tiktokUsername: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "700",
+    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+    letterSpacing: 0.2
+  },
+  tiktokCaption: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "400",
+    lineHeight: 20,
+    marginBottom: 8,
+    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3
+  },
+  tiktokMusicContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4
+  },
+  tiktokMusicIcon: {
+    marginRight: 6,
+    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3
+  },
+  tiktokMusicText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "500",
+    textShadowColor: "rgba(0, 0, 0, 0.8)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+    flex: 1
+  }
+});

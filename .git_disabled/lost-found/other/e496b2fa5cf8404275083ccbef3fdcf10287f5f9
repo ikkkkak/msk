@@ -1,0 +1,1810 @@
+// import React, { useState, useRef, useCallback, useEffect } from "react";
+// import {
+//   View,
+//   Text,
+//   Image,
+//   TouchableOpacity,
+//   StyleSheet,
+//   Dimensions,
+//   ScrollView,
+//   Modal,
+//   Pressable,
+//   Animated
+// } from "react-native";
+// import { MaterialIcons } from "@expo/vector-icons";
+// import { useTranslation } from "react-i18next";
+// import { Video, ResizeMode, AVPlaybackStatus } from "expo-av";
+
+// /**
+//  * Property data interface for Zillow-style property card
+//  */
+// interface PropertyData {
+//   id: number;
+//   title: string;
+//   listing_price?: number;
+//   price?: number;
+//   images?: string[];
+//   bedrooms?: number;
+//   bathrooms?: number;
+//   square_footage?: number;
+//   area?: number;
+//   address?: string;
+//   city?: string;
+//   state?: string;
+//   country?: string;
+//   year_built?: number;
+//   property_type?: string;
+//   organization?: {
+//     name?: string;
+//     banner_image?: string;
+//     phone?: string;
+//     website?: string;
+//   };
+//   amenities?: string[];
+//   status?: string;
+//   days_on_market?: number;
+//   video_url?: string;
+//   videoUrl?: string;
+//   video?: string;
+//   videos?: string[]; // Array of video URLs (from backend)
+// }
+
+// /**
+//  * Zillow-style property card component props
+//  */
+// interface ZillowStylePropertyCardProps {
+//   property: PropertyData;
+//   onPress: (id: number) => void;
+//   onCall?: (phone?: string) => void;
+//   onEmail?: (website?: string) => void;
+//   onFavorite?: (id: number) => void;
+//   isFavorite?: boolean;
+// }
+
+// const { width: screenWidth } = Dimensions.get("window");
+// const CARD_WIDTH = screenWidth - 32;
+// const IMAGE_HEIGHT = 180; // Taller image slider
+
+// /**
+//  * Image Skeleton Loader Component with shimmer effect
+//  */
+// const ImageSkeleton: React.FC<{ width: number; height: number }> = ({
+//   width,
+//   height
+// }) => {
+//   const shimmerAnimation = useRef(new Animated.Value(0)).current;
+
+//   useEffect(() => {
+//     const shimmer = Animated.loop(
+//       Animated.timing(shimmerAnimation, {
+//         toValue: 1,
+//         duration: 1500,
+//         useNativeDriver: true
+//       })
+//     );
+//     shimmer.start();
+//     return () => shimmer.stop();
+//   }, []);
+
+//   const translateX = shimmerAnimation.interpolate({
+//     inputRange: [0, 1],
+//     outputRange: [-width * 2, width * 2]
+//   });
+
+//   const opacity = shimmerAnimation.interpolate({
+//     inputRange: [0, 0.5, 1],
+//     outputRange: [0.3, 0.6, 0.3]
+//   });
+
+//   return (
+//     <View style={[styles.skeletonContainer, { width, height }]}>
+//       <View style={[styles.skeletonBase, { width, height }]} />
+//       <Animated.View
+//         style={[
+//           styles.skeletonShimmer,
+//           {
+//             width: width * 0.5,
+//             height,
+//             transform: [{ translateX }],
+//             opacity
+//           }
+//         ]}
+//       />
+//     </View>
+//   );
+// };
+
+// export const ZillowStylePropertyCard: React.FC<
+//   ZillowStylePropertyCardProps
+// > = ({
+//   property,
+//   onPress,
+//   onCall,
+//   onEmail,
+//   onFavorite,
+//   isFavorite = false
+// }) => {
+//   const { t } = useTranslation();
+//   const [imageIndex, setImageIndex] = useState(0);
+//   const [loadingImages, setLoadingImages] = useState<{
+//     [key: number]: boolean;
+//   }>({});
+//   const [videoModalVisible, setVideoModalVisible] = useState(false);
+//   const [isPlaying, setIsPlaying] = useState(true);
+//   const [videoStatus, setVideoStatus] = useState<AVPlaybackStatus | null>(null);
+
+//   const videoPreviewRef = useRef<Video>(null);
+//   const modalVideoRef = useRef<Video>(null);
+//   const initializedPropertyId = useRef<number | undefined>(undefined);
+
+//   // Use backend-translated title directly
+//   const propertyTitle = property.title || "";
+
+//   // Extract property data - filter out invalid image URLs
+//   const images = (property.images || []).filter(
+//     (img: string) => img && typeof img === "string" && img.trim().length > 0
+//   );
+//   const price = property.listing_price || property.price || 0;
+//   const area = property.square_footage || property.area || 0;
+
+//   // Initialize loading state for all images (only once per property)
+//   useEffect(() => {
+//     // Only initialize if this is a new property
+//     if (initializedPropertyId.current !== property.id) {
+//       initializedPropertyId.current = property.id;
+
+//       if (images.length > 0) {
+//         const initialLoading: { [key: number]: boolean } = {};
+//         images.forEach((_, index) => {
+//           initialLoading[index] = true;
+//         });
+//         setLoadingImages(initialLoading);
+
+//         // Fallback: hide skeleton after 5 seconds if images don't load
+//         const timeoutId = setTimeout(() => {
+//           setLoadingImages({});
+//         }, 5000);
+
+//         return () => clearTimeout(timeoutId);
+//       } else {
+//         setLoadingImages({});
+//       }
+//     }
+//   }, [property.id, images]);
+
+//   // Check all possible video field names (string or array)
+//   const videoUrl =
+//     property.video_url ||
+//     property.videoUrl ||
+//     property.video ||
+//     (Array.isArray(property.videos) && property.videos.length > 0
+//       ? property.videos[0]
+//       : null);
+
+//   /**
+//    * Format price in Mauritanian Ouguiya (MRU)
+//    */
+//   const formatPrice = (amount: number) => {
+//     return `${amount.toLocaleString()} MRU`;
+//   };
+
+//   /**
+//    * Handle image scroll to update current index
+//    */
+//   const handleImageScroll = (event: any) => {
+//     const contentOffset = event.nativeEvent.contentOffset.x;
+//     const index = Math.round(contentOffset / CARD_WIDTH);
+//     setImageIndex(index);
+//   };
+
+//   /**
+//    * Get property location string
+//    */
+//   const getLocation = () => {
+//     return (
+//       property.address ||
+//       [property.city, property.state, property.country]
+//         .filter(Boolean)
+//         .join(", ")
+//     );
+//   };
+
+//   /**
+//    * Get property specs string
+//    */
+//   const getPropertySpecs = () => {
+//     const specs = [];
+//     if (property.bedrooms)
+//       specs.push(`${property.bedrooms} ${t("propertyCard.bedrooms")}`);
+//     if (property.bathrooms)
+//       specs.push(`${property.bathrooms} ${t("propertyCard.bathrooms")}`);
+//     if (area > 0) specs.push(`${area.toLocaleString()} ${t("sale.sqm")}`);
+//     return specs.join(" • ");
+//   };
+
+//   // Video Modal Handlers
+//   const openVideoModal = useCallback(() => {
+//     setVideoModalVisible(true);
+//     setIsPlaying(true);
+//   }, []);
+
+//   const closeVideoModal = useCallback(() => {
+//     setVideoModalVisible(false);
+//     modalVideoRef.current?.pauseAsync();
+//   }, []);
+
+//   const togglePlayPause = useCallback(async () => {
+//     if (modalVideoRef.current) {
+//       if (isPlaying) {
+//         await modalVideoRef.current.pauseAsync();
+//       } else {
+//         await modalVideoRef.current.playAsync();
+//       }
+//       setIsPlaying(!isPlaying);
+//     }
+//   }, [isPlaying]);
+
+//   const handleVideoStatusUpdate = (status: AVPlaybackStatus) => {
+//     setVideoStatus(status);
+//     if (status.isLoaded) {
+//       setIsPlaying(status.isPlaying);
+//     }
+//   };
+
+//   const seekVideo = useCallback(
+//     async (direction: "forward" | "backward") => {
+//       if (modalVideoRef.current && videoStatus?.isLoaded) {
+//         const currentPosition = videoStatus.positionMillis || 0;
+//         const seekAmount = 10000; // 10 seconds
+//         const newPosition =
+//           direction === "forward"
+//             ? currentPosition + seekAmount
+//             : Math.max(0, currentPosition - seekAmount);
+//         await modalVideoRef.current.setPositionAsync(newPosition);
+//       }
+//     },
+//     [videoStatus]
+//   );
+
+//   const formatTime = (millis: number) => {
+//     const totalSeconds = Math.floor(millis / 1000);
+//     const minutes = Math.floor(totalSeconds / 60);
+//     const seconds = totalSeconds % 60;
+//     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+//   };
+
+//   return (
+//     <TouchableOpacity
+//       style={styles.card}
+//       onPress={() => onPress(property.id)}
+//       activeOpacity={0.95}
+//     >
+//       {/* Image Section */}
+//       <View style={styles.imageContainer}>
+//         {images.length > 0 ? (
+//           <ScrollView
+//             horizontal
+//             pagingEnabled
+//             showsHorizontalScrollIndicator={false}
+//             onMomentumScrollEnd={handleImageScroll}
+//             style={styles.imageScroll}
+//           >
+//             {images.map((image, index) => {
+//               const isLoading = loadingImages[index] === true; // Only show skeleton if explicitly true
+//               return (
+//                 <View key={index} style={styles.imageWrapper}>
+//                   {isLoading && (
+//                     <View style={styles.skeletonOverlay}>
+//                       <ImageSkeleton width={CARD_WIDTH} height={IMAGE_HEIGHT} />
+//                     </View>
+//                   )}
+//                   <Image
+//                     source={{ uri: image }}
+//                     style={styles.propertyImage}
+//                     resizeMode="cover"
+//                     onLoadStart={() => {
+//                       setLoadingImages((prev) => {
+//                         // Only set to true if not already false (image might load instantly)
+//                         if (prev[index] !== false) {
+//                           return { ...prev, [index]: true };
+//                         }
+//                         return prev;
+//                       });
+//                     }}
+//                     onLoad={() => {
+//                       // onLoad fires when image is loaded and ready to display
+//                       setLoadingImages((prev) => ({ ...prev, [index]: false }));
+//                     }}
+//                     onLoadEnd={() => {
+//                       // Fallback in case onLoad doesn't fire
+//                       setLoadingImages((prev) => ({ ...prev, [index]: false }));
+//                     }}
+//                     onError={(error) => {
+//                       console.log(
+//                         "Image load error for property",
+//                         property.id,
+//                         "image index",
+//                         index,
+//                         ":",
+//                         image
+//                       );
+//                       setLoadingImages((prev) => ({ ...prev, [index]: false }));
+//                     }}
+//                   />
+//                 </View>
+//               );
+//             })}
+//           </ScrollView>
+//         ) : (
+//           <View style={styles.placeholderImage}>
+//             <MaterialIcons name="home" size={40} color="#9CA3AF" />
+//             <Text style={styles.placeholderText}>
+//               {t("propertyCard.noImage")}
+//             </Text>
+//           </View>
+//         )}
+
+//         {/* Image Indicators */}
+//         {images.length > 1 && (
+//           <View style={styles.imageIndicators}>
+//             {images.slice(0, 5).map((_, index) => (
+//               <View
+//                 key={index}
+//                 style={[
+//                   styles.indicator,
+//                   index === imageIndex && styles.activeIndicator
+//                 ]}
+//               />
+//             ))}
+//             {images.length > 5 && (
+//               <Text style={styles.moreIndicator}>+{images.length - 5}</Text>
+//             )}
+//           </View>
+//         )}
+
+//         {/* Favorite Button */}
+//         {onFavorite && (
+//           <TouchableOpacity
+//             style={styles.favoriteButton}
+//             onPress={() => onFavorite(property.id)}
+//           >
+//             <MaterialIcons
+//               name={isFavorite ? "favorite" : "favorite-border"}
+//               size={20}
+//               color={isFavorite ? "#EF4444" : "#FFFFFF"}
+//             />
+//           </TouchableOpacity>
+//         )}
+
+//         {/* Status Badge */}
+//         {/* {property.status && (
+//           <View style={styles.statusBadge}>
+//             <Text style={styles.statusText}>{property.status}</Text>
+//           </View>
+//         )} */}
+
+//         {/* Video Preview - Bottom Left */}
+//         {videoUrl && (
+//           <TouchableOpacity
+//             style={styles.videoPreviewContainer}
+//             onPress={openVideoModal}
+//             activeOpacity={0.9}
+//           >
+//             <Video
+//               ref={videoPreviewRef}
+//               source={{ uri: videoUrl }}
+//               style={styles.videoPreview}
+//               resizeMode={ResizeMode.COVER}
+//               shouldPlay={true}
+//               isLooping={true}
+//               isMuted={true}
+//             />
+//             <View style={styles.videoPlayOverlay}>
+//               <MaterialIcons name="play-arrow" size={20} color="#FFF" />
+//             </View>
+//             <View style={styles.videoLabel}>
+//               <MaterialIcons name="videocam" size={10} color="#FFF" />
+//               <Text style={styles.videoLabelText}>
+//                 {t("common.video", "Video")}
+//               </Text>
+//             </View>
+//           </TouchableOpacity>
+//         )}
+//       </View>
+
+//       {/* Content Section */}
+//       <View style={styles.contentContainer}>
+//         {/* Title */}
+//         <Text style={styles.title} numberOfLines={2}>
+//           {propertyTitle}
+//         </Text>
+
+//         <View
+//           style={{
+//             flexDirection: "row",
+//             justifyContent: "space-between",
+//             alignItems: "center"
+//           }}
+//         >
+//           {/* Price */}
+//           <Text style={styles.price}>{formatPrice(price)}</Text>
+
+//           {/* Agency Banner */}
+//           {property.organization?.name && (
+//             <Image
+//               source={{ uri: property.organization?.banner_image }}
+//               style={styles.agencyBannerImage}
+//             />
+//           )}
+//         </View>
+
+//         {/* Property Specs */}
+//         <Text style={styles.specs}>{getPropertySpecs()}</Text>
+
+//         <View style={styles.metaRow}>
+//           {/* Location */}
+//           <Text style={styles.location} numberOfLines={1}>
+//             {getLocation()}
+//           </Text>
+
+//           {property.property_type && (
+//             <>
+//               <View style={styles.divider} />
+//               <Text style={styles.propertyType}>{property.property_type}</Text>
+//             </>
+//           )}
+
+//           {property.year_built && (
+//             <>
+//               <View style={styles.divider} />
+//               <Text style={styles.yearBuilt}>
+//                 {t("propertyCard.built")} {property.year_built}
+//               </Text>
+//             </>
+//           )}
+//         </View>
+
+//         {/* Organization and Actions */}
+//         <View style={styles.footerSection}>
+//           {property.organization?.name && (
+//             <Text style={styles.organizationName} numberOfLines={1}>
+//               {property.organization.name}
+//             </Text>
+//           )}
+
+//           <View style={styles.actionButtons}>
+//             {onCall && property.organization?.phone && (
+//               <TouchableOpacity
+//                 style={styles.callButton}
+//                 onPress={() => onCall(property.organization?.phone)}
+//               >
+//                 <MaterialIcons name="phone" size={16} color="#FFFFFF" />
+//                 <Text style={styles.callButtonText}>
+//                   {t("propertyCard.call")}
+//                 </Text>
+//               </TouchableOpacity>
+//             )}
+
+//             {onEmail && property.organization?.website && (
+//               <TouchableOpacity
+//                 style={styles.emailButton}
+//                 onPress={() => onEmail(property.organization?.website)}
+//               >
+//                 <MaterialIcons name="email" size={16} color="#0066CC" />
+//                 <Text style={styles.emailButtonText}>
+//                   {t("propertyCard.email")}
+//                 </Text>
+//               </TouchableOpacity>
+//             )}
+//           </View>
+//         </View>
+//       </View>
+
+//       {/* Video Modal */}
+//       <Modal
+//         visible={videoModalVisible}
+//         transparent={true}
+//         animationType="fade"
+//         onRequestClose={closeVideoModal}
+//         statusBarTranslucent
+//       >
+//         <View style={styles.modalOverlay}>
+//           <Pressable style={styles.modalBackdrop} onPress={closeVideoModal} />
+
+//           <View style={styles.modalContent}>
+//             {/* Close Button */}
+//             <TouchableOpacity
+//               style={styles.modalCloseBtn}
+//               onPress={closeVideoModal}
+//             >
+//               <MaterialIcons name="close" size={24} color="#FFF" />
+//             </TouchableOpacity>
+
+//             {/* Video Player */}
+//             <Video
+//               ref={modalVideoRef}
+//               source={{ uri: videoUrl || "" }}
+//               style={styles.modalVideo}
+//               resizeMode={ResizeMode.CONTAIN}
+//               shouldPlay={true}
+//               isLooping={false}
+//               onPlaybackStatusUpdate={handleVideoStatusUpdate}
+//             />
+
+//             {/* Video Controls */}
+//             <View style={styles.videoControls}>
+//               {/* Progress Bar */}
+//               {videoStatus?.isLoaded && (
+//                 <View style={styles.progressContainer}>
+//                   <Text style={styles.timeText}>
+//                     {formatTime(videoStatus.positionMillis || 0)}
+//                   </Text>
+//                   <View style={styles.progressBar}>
+//                     <View
+//                       style={[
+//                         styles.progressFill,
+//                         {
+//                           width: `${
+//                             ((videoStatus.positionMillis || 0) /
+//                               (videoStatus.durationMillis || 1)) *
+//                             100
+//                           }%`
+//                         }
+//                       ]}
+//                     />
+//                   </View>
+//                   <Text style={styles.timeText}>
+//                     {formatTime(videoStatus.durationMillis || 0)}
+//                   </Text>
+//                 </View>
+//               )}
+
+//               {/* Control Buttons */}
+//               <View style={styles.controlButtons}>
+//                 <TouchableOpacity
+//                   style={styles.controlBtn}
+//                   onPress={() => seekVideo("backward")}
+//                 >
+//                   <MaterialIcons name="replay-10" size={28} color="#FFF" />
+//                 </TouchableOpacity>
+
+//                 <TouchableOpacity
+//                   style={styles.playPauseBtn}
+//                   onPress={togglePlayPause}
+//                 >
+//                   <MaterialIcons
+//                     name={isPlaying ? "pause" : "play-arrow"}
+//                     size={36}
+//                     color="#FFF"
+//                   />
+//                 </TouchableOpacity>
+
+//                 <TouchableOpacity
+//                   style={styles.controlBtn}
+//                   onPress={() => seekVideo("forward")}
+//                 >
+//                   <MaterialIcons name="forward-10" size={28} color="#FFF" />
+//                 </TouchableOpacity>
+//               </View>
+//             </View>
+
+//             {/* Property Title in Modal */}
+//             <Text style={styles.modalTitle} numberOfLines={2}>
+//               {propertyTitle}
+//             </Text>
+//           </View>
+//         </View>
+//       </Modal>
+//     </TouchableOpacity>
+//   );
+// };
+
+// /**
+//  * Professional styling for Zillow-style property card with video support
+//  */
+// const styles = StyleSheet.create({
+//   // Main card container
+//   card: {
+//     backgroundColor: "#FFFFFF",
+//     borderRadius: 5,
+//     marginBottom: 16,
+//     shadowColor: "#000",
+//     borderColor: "#E5E7EB",
+//     borderWidth: 1,
+//     shadowOffset: { width: 0, height: 4 },
+//     shadowOpacity: 0.1,
+//     shadowRadius: 12,
+//     elevation: 6,
+//     overflow: "hidden"
+//   },
+
+//   // Image section - TALLER
+//   imageContainer: {
+//     position: "relative",
+//     height: IMAGE_HEIGHT
+//   },
+//   imageScroll: {
+//     flex: 1
+//   },
+//   imageWrapper: {
+//     position: "relative"
+//   },
+//   propertyImage: {
+//     width: CARD_WIDTH,
+//     height: IMAGE_HEIGHT
+//   },
+//   skeletonOverlay: {
+//     position: "absolute",
+//     top: 0,
+//     left: 0,
+//     right: 0,
+//     bottom: 0,
+//     backgroundColor: "#F9FAFB",
+//     justifyContent: "center",
+//     alignItems: "center",
+//     zIndex: 1,
+//     overflow: "hidden"
+//   },
+//   skeletonContainer: {
+//     width: "100%",
+//     height: "100%",
+//     backgroundColor: "#E5E7EB",
+//     overflow: "hidden",
+//     position: "relative"
+//   },
+//   skeletonBase: {
+//     width: "100%",
+//     height: "100%",
+//     backgroundColor: "#E5E7EB"
+//   },
+//   skeletonShimmer: {
+//     position: "absolute",
+//     top: 0,
+//     backgroundColor: "rgba(255, 255, 255, 0.5)",
+//     shadowColor: "#FFFFFF",
+//     shadowOffset: { width: 0, height: 0 },
+//     shadowOpacity: 0.8,
+//     shadowRadius: 20
+//   },
+//   placeholderImage: {
+//     width: CARD_WIDTH,
+//     height: IMAGE_HEIGHT,
+//     backgroundColor: "#F9FAFB",
+//     justifyContent: "center",
+//     alignItems: "center"
+//   },
+//   placeholderText: {
+//     fontSize: 14,
+//     color: "#9CA3AF",
+//     marginTop: 8,
+//     fontWeight: "500"
+//   },
+
+//   // Image indicators
+//   imageIndicators: {
+//     position: "absolute",
+//     bottom: 12,
+//     left: 0,
+//     right: 0,
+//     flexDirection: "row",
+//     justifyContent: "center",
+//     alignItems: "center",
+//     gap: 6
+//   },
+//   indicator: {
+//     width: 6,
+//     height: 6,
+//     borderRadius: 3,
+//     backgroundColor: "rgba(255, 255, 255, 0.5)"
+//   },
+//   activeIndicator: {
+//     backgroundColor: "#FFFFFF",
+//     width: 18
+//   },
+//   moreIndicator: {
+//     fontSize: 10,
+//     color: "#FFF",
+//     marginLeft: 4,
+//     fontWeight: "600"
+//   },
+
+//   // Overlay buttons and badges
+//   favoriteButton: {
+//     position: "absolute",
+//     top: 12,
+//     right: 12,
+//     width: 36,
+//     height: 36,
+//     borderRadius: 18,
+//     backgroundColor: "rgba(0, 0, 0, 0.4)",
+//     justifyContent: "center",
+//     alignItems: "center"
+//   },
+//   statusBadge: {
+//     position: "absolute",
+//     top: 12,
+//     left: 12,
+//     backgroundColor: "#10B981",
+//     paddingHorizontal: 10,
+//     paddingVertical: 5,
+//     borderRadius: 8
+//   },
+//   statusText: {
+//     color: "#FFFFFF",
+//     fontSize: 11,
+//     fontWeight: "600"
+//   },
+
+//   // Video Preview - Bottom Left
+//   videoPreviewContainer: {
+//     position: "absolute",
+//     bottom: 12,
+//     left: 12,
+//     width: 75,
+//     height: 100,
+//     borderRadius: 5,
+//     overflow: "hidden",
+//     backgroundColor: "#000",
+//     borderWidth: 1,
+//     borderColor: "#AAA",
+//     shadowColor: "#000",
+//     shadowOffset: { width: 0, height: 2 },
+//     shadowOpacity: 0.3,
+//     shadowRadius: 4,
+//     elevation: 5
+//   },
+//   videoPreview: {
+//     width: "100%",
+//     height: "100%"
+//   },
+//   videoPlayOverlay: {
+//     position: "absolute",
+//     top: "50%",
+//     left: "50%",
+//     transform: [{ translateX: -14 }, { translateY: -14 }],
+//     width: 28,
+//     height: 28,
+//     borderRadius: 14,
+//     backgroundColor: "rgba(0,0,0,0.6)",
+//     alignItems: "center",
+//     justifyContent: "center"
+//   },
+//   videoLabel: {
+//     position: "absolute",
+//     bottom: 4,
+//     left: 4,
+//     right: 4,
+//     flexDirection: "row",
+//     alignItems: "center",
+//     justifyContent: "center",
+//     gap: 3,
+//     backgroundColor: "rgba(0,0,0,0.6)",
+//     borderRadius: 4,
+//     paddingVertical: 2
+//   },
+//   videoLabelText: {
+//     fontSize: 9,
+//     color: "#FFF",
+//     fontWeight: "600"
+//   },
+
+//   // Content section
+//   contentContainer: {
+//     paddingVertical: 12,
+//     paddingHorizontal: 12
+//   },
+//   title: {
+//     fontSize: 17,
+//     fontWeight: "700",
+//     color: "#111827",
+//     lineHeight: 22,
+//     marginBottom: 4
+//   },
+//   price: {
+//     fontSize: 20,
+//     fontWeight: "700",
+//     color: "#111827",
+//     marginBottom: 6
+//   },
+//   specs: {
+//     fontSize: 14,
+//     color: "#374151",
+//     fontWeight: "500",
+//     marginBottom: 6
+//   },
+//   metaRow: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     flexWrap: "wrap",
+//     marginBottom: 8
+//   },
+//   location: {
+//     fontSize: 13,
+//     color: "#6B7280",
+//     flexShrink: 1
+//   },
+//   divider: {
+//     width: 1,
+//     height: 10,
+//     backgroundColor: "#E5E7EB",
+//     marginHorizontal: 8
+//   },
+//   propertyType: {
+//     fontSize: 12,
+//     color: "#9CA3AF",
+//     textTransform: "uppercase",
+//     fontWeight: "600",
+//     letterSpacing: 0.3
+//   },
+//   yearBuilt: {
+//     fontSize: 12,
+//     color: "#6B7280"
+//   },
+
+//   // Footer section
+//   footerSection: {
+//     flexDirection: "row",
+//     justifyContent: "space-between",
+//     alignItems: "center",
+//     paddingTop: 10,
+//     borderTopWidth: 1,
+//     borderTopColor: "#F3F4F6"
+//   },
+//   organizationName: {
+//     fontSize: 13,
+//     color: "#6B7280",
+//     fontWeight: "500",
+//     flex: 1,
+//     marginRight: 12
+//   },
+//   actionButtons: {
+//     flexDirection: "row",
+//     gap: 8
+//   },
+//   callButton: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     backgroundColor: "#111827",
+//     paddingHorizontal: 12,
+//     paddingVertical: 8,
+//     borderRadius: 8,
+//     gap: 4
+//   },
+//   callButtonText: {
+//     color: "#FFFFFF",
+//     fontSize: 12,
+//     fontWeight: "600"
+//   },
+//   emailButton: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     backgroundColor: "#FFFFFF",
+//     borderWidth: 1,
+//     borderColor: "#D1D5DB",
+//     paddingHorizontal: 12,
+//     paddingVertical: 8,
+//     borderRadius: 8,
+//     gap: 4
+//   },
+//   emailButtonText: {
+//     color: "#374151",
+//     fontSize: 12,
+//     fontWeight: "600"
+//   },
+
+//   // Video Modal
+//   modalOverlay: {
+//     flex: 1,
+//     backgroundColor: "rgba(0,0,0,0.95)",
+//     justifyContent: "center",
+//     alignItems: "center"
+//   },
+//   modalBackdrop: {
+//     ...StyleSheet.absoluteFillObject
+//   },
+//   modalContent: {
+//     width: "100%",
+//     alignItems: "center"
+//   },
+//   modalCloseBtn: {
+//     position: "absolute",
+//     top: 50,
+//     right: 20,
+//     width: 44,
+//     height: 44,
+//     borderRadius: 22,
+//     backgroundColor: "rgba(255,255,255,0.2)",
+//     alignItems: "center",
+//     justifyContent: "center",
+//     zIndex: 10
+//   },
+//   modalVideo: {
+//     width: screenWidth,
+//     height: screenWidth * 0.75
+//   },
+//   modalTitle: {
+//     fontSize: 16,
+//     fontWeight: "600",
+//     color: "#FFF",
+//     textAlign: "center",
+//     paddingHorizontal: 20,
+//     marginTop: 20
+//   },
+
+//   // Video Controls
+//   videoControls: {
+//     width: "100%",
+//     paddingHorizontal: 20,
+//     marginTop: 20
+//   },
+//   progressContainer: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     gap: 10
+//   },
+//   progressBar: {
+//     flex: 1,
+//     height: 4,
+//     backgroundColor: "rgba(255,255,255,0.3)",
+//     borderRadius: 2
+//   },
+//   progressFill: {
+//     height: "100%",
+//     backgroundColor: "#FFF",
+//     borderRadius: 2
+//   },
+//   timeText: {
+//     fontSize: 12,
+//     color: "rgba(255,255,255,0.8)",
+//     fontWeight: "500",
+//     minWidth: 40
+//   },
+//   controlButtons: {
+//     flexDirection: "row",
+//     alignItems: "center",
+//     justifyContent: "center",
+//     gap: 30,
+//     marginTop: 20
+//   },
+//   controlBtn: {
+//     width: 50,
+//     height: 50,
+//     borderRadius: 25,
+//     backgroundColor: "rgba(255,255,255,0.15)",
+//     alignItems: "center",
+//     justifyContent: "center"
+//   },
+//   playPauseBtn: {
+//     width: 64,
+//     height: 64,
+//     borderRadius: 32,
+//     backgroundColor: "rgba(255,255,255,0.2)",
+//     alignItems: "center",
+//     justifyContent: "center"
+//   },
+//   agencyBanner: {
+//     position: "absolute",
+//     top: 0,
+//     left: 0,
+//     right: 0,
+//     backgroundColor: "rgba(0,0,0,0.5)",
+//     paddingVertical: 4,
+//     paddingHorizontal: 8,
+//     borderRadius: 4
+//   },
+//   agencyBannerText: {
+//     fontSize: 12,
+//     color: "#FFFFFF",
+//     fontWeight: "600"
+//   },
+//   agencyBannerImage: {
+//     width: 100,
+//     height: 40,
+//     borderRadius: 4
+//   }
+// });
+
+import React, { useState, useRef, useCallback, useEffect } from "react";
+import {
+  View,
+  Text,
+  Image,
+  TouchableOpacity,
+  StyleSheet,
+  Dimensions,
+  ScrollView,
+  Modal,
+  Pressable,
+  Animated,
+  Platform
+} from "react-native";
+import { MaterialIcons } from "@expo/vector-icons";
+import { useTranslation } from "react-i18next";
+import { Video, ResizeMode, AVPlaybackStatus } from "expo-av";
+
+interface PropertyData {
+  id: number;
+  title: string;
+  listing_price?: number;
+  price?: number;
+  images?: string[];
+  bedrooms?: number;
+  bathrooms?: number;
+  square_footage?: number;
+  area?: number;
+  address?: string;
+  city?: string;
+  state?: string;
+  country?: string;
+  year_built?: number;
+  property_type?: string;
+  organization?: {
+    name?: string;
+    banner_image?: string;
+    phone?: string;
+    website?: string;
+  };
+  amenities?: string[];
+  status?: string;
+  days_on_market?: number;
+  video_url?: string;
+  videoUrl?: string;
+  video?: string;
+  videos?: string[];
+}
+
+interface ZillowStylePropertyCardProps {
+  property: PropertyData;
+  onPress: (id: number) => void;
+  onCall?: (phone?: string) => void;
+  onEmail?: (website?: string) => void;
+  onFavorite?: (id: number) => void;
+  isFavorite?: boolean;
+}
+
+const { width: screenWidth } = Dimensions.get("window");
+const CARD_WIDTH = screenWidth - 32;
+const IMAGE_HEIGHT = 140;
+
+const ImageSkeleton: React.FC<{ width: number; height: number }> = ({
+  width,
+  height
+}) => {
+  const shimmerAnimation = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    // DISABLE SHIMMER ANIMATION ON ANDROID to prevent crashes and improve performance
+    if (Platform.OS === 'android') {
+      // On Android, no shimmer animation - just static skeleton
+      shimmerAnimation.setValue(0);
+      return;
+    }
+
+    // iOS: Shimmer animation
+    const shimmer = Animated.loop(
+      Animated.timing(shimmerAnimation, {
+        toValue: 1,
+        duration: 1500,
+        useNativeDriver: true
+      })
+    );
+    shimmer.start();
+    return () => shimmer.stop();
+  }, [shimmerAnimation]);
+
+  // On Android, don't use animated shimmer - just return static view
+  if (Platform.OS === 'android') {
+    return (
+      <View style={[styles.skeletonContainer, { width, height }]}>
+        <View style={[styles.skeletonShimmer, { width, height, opacity: 0.3 }]} />
+      </View>
+    );
+  }
+
+  const translateX = shimmerAnimation.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-width * 2, width * 2]
+  });
+
+  return (
+    <View style={[styles.skeletonContainer, { width, height }]}>
+      <Animated.View
+        style={[
+          styles.skeletonShimmer,
+          {
+            width: width * 0.4,
+            height,
+            transform: [{ translateX }]
+          }
+        ]}
+      />
+    </View>
+  );
+};
+
+export const ZillowStylePropertyCard: React.FC<
+  ZillowStylePropertyCardProps
+> = ({
+  property,
+  onPress,
+  onCall,
+  onEmail,
+  onFavorite,
+  isFavorite = false
+}) => {
+  const { t } = useTranslation();
+  const [imageIndex, setImageIndex] = useState(0);
+  const [loadingImages, setLoadingImages] = useState<{
+    [key: number]: boolean;
+  }>({});
+  const [videoModalVisible, setVideoModalVisible] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [videoStatus, setVideoStatus] = useState<AVPlaybackStatus | null>(null);
+
+  const videoPreviewRef = useRef<Video>(null);
+  const modalVideoRef = useRef<Video>(null);
+  const initializedPropertyId = useRef<number | undefined>(undefined);
+
+  const propertyTitle = property.title || "";
+  const images = (property.images || []).filter(
+    (img: string) => img && typeof img === "string" && img.trim().length > 0
+  );
+  const price = property.listing_price || property.price || 0;
+  const area = property.square_footage || property.area || 0;
+
+  useEffect(() => {
+    if (initializedPropertyId.current !== property.id) {
+      initializedPropertyId.current = property.id;
+
+      if (images.length > 0) {
+        const initialLoading: { [key: number]: boolean } = {};
+        images.forEach((_, index) => {
+          initialLoading[index] = true;
+        });
+        setLoadingImages(initialLoading);
+
+        const timeoutId = setTimeout(() => {
+          setLoadingImages({});
+        }, 5000);
+
+        return () => clearTimeout(timeoutId);
+      }
+    }
+  }, [property.id, images]);
+
+  const videoUrl =
+    property.video_url ||
+    property.videoUrl ||
+    property.video ||
+    (Array.isArray(property.videos) && property.videos.length > 0
+      ? property.videos[0]
+      : null);
+
+  const formatPrice = (amount: number) => {
+    return `${amount.toLocaleString()} `;
+  };
+
+  const handleImageScroll = (event: any) => {
+    const contentOffset = event.nativeEvent.contentOffset.x;
+    const index = Math.round(contentOffset / CARD_WIDTH);
+    setImageIndex(index);
+  };
+
+  const getLocation = () => {
+    return (
+      property.address ||
+      [property.city, property.state, property.country]
+        .filter(Boolean)
+        .join(", ")
+    );
+  };
+
+  const getPropertySpecs = () => {
+    const specs = [];
+    if (property.bedrooms)
+      specs.push(`${property.bedrooms}${t("propertyCard.bedrooms", "bd")}`);
+    if (property.bathrooms)
+      specs.push(`${property.bathrooms}${t("propertyCard.bathrooms", "ba")}`);
+    if (area > 0) specs.push(`${area}sqm`);
+    return specs.join(" • ");
+  };
+
+  const openVideoModal = useCallback(() => {
+    setVideoModalVisible(true);
+    setIsPlaying(true);
+  }, []);
+
+  const closeVideoModal = useCallback(() => {
+    setVideoModalVisible(false);
+    modalVideoRef.current?.pauseAsync();
+  }, []);
+
+  const togglePlayPause = useCallback(async () => {
+    if (modalVideoRef.current) {
+      if (isPlaying) {
+        await modalVideoRef.current.pauseAsync();
+      } else {
+        await modalVideoRef.current.playAsync();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  }, [isPlaying]);
+
+  const handleVideoStatusUpdate = (status: AVPlaybackStatus) => {
+    setVideoStatus(status);
+    if (status.isLoaded) {
+      setIsPlaying(status.isPlaying);
+    }
+  };
+
+  const seekVideo = useCallback(
+    async (direction: "forward" | "backward") => {
+      if (modalVideoRef.current && videoStatus?.isLoaded) {
+        const currentPosition = videoStatus.positionMillis || 0;
+        const seekAmount = 10000;
+        const newPosition =
+          direction === "forward"
+            ? currentPosition + seekAmount
+            : Math.max(0, currentPosition - seekAmount);
+        await modalVideoRef.current.setPositionAsync(newPosition);
+      }
+    },
+    [videoStatus]
+  );
+
+  const formatTime = (millis: number) => {
+    const totalSeconds = Math.floor(millis / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  return (
+    <TouchableOpacity
+      style={styles.card}
+      onPress={() => onPress(property.id)}
+      activeOpacity={0.8}
+    >
+      {/* Image Section */}
+      <View style={styles.imageContainer}>
+        {images.length > 0 ? (
+          <>
+            <ScrollView
+              horizontal
+              pagingEnabled
+              showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={handleImageScroll}
+              scrollEventThrottle={16}
+              decelerationRate="fast"
+              snapToInterval={CARD_WIDTH}
+              snapToAlignment="start"
+              contentContainerStyle={{ width: CARD_WIDTH * images.length }}
+              nestedScrollEnabled={Platform.OS === "android"}
+            >
+              {images.map((image, index) => {
+                const isLoading = loadingImages[index] === true;
+                return (
+                  <View
+                    key={index}
+                    style={[styles.imageWrapper, { width: CARD_WIDTH }]}
+                  >
+                    {isLoading && (
+                      <ImageSkeleton width={CARD_WIDTH} height={IMAGE_HEIGHT} />
+                    )}
+                    <Image
+                      source={{ uri: image }}
+                      style={[styles.propertyImage, { width: CARD_WIDTH }]}
+                      resizeMode="cover"
+                      onLoadStart={() => {
+                        setLoadingImages((prev) => {
+                          if (prev[index] !== false) {
+                            return { ...prev, [index]: true };
+                          }
+                          return prev;
+                        });
+                      }}
+                      onLoad={() => {
+                        setLoadingImages((prev) => ({
+                          ...prev,
+                          [index]: false
+                        }));
+                      }}
+                      onLoadEnd={() => {
+                        setLoadingImages((prev) => ({
+                          ...prev,
+                          [index]: false
+                        }));
+                      }}
+                      onError={() => {
+                        setLoadingImages((prev) => ({
+                          ...prev,
+                          [index]: false
+                        }));
+                      }}
+                    />
+                  </View>
+                );
+              })}
+            </ScrollView>
+
+            {/* Favorite Button */}
+            {onFavorite && (
+              <TouchableOpacity
+                style={styles.favoriteButton}
+                onPress={() => onFavorite(property.id)}
+              >
+                <MaterialIcons
+                  name={isFavorite ? "favorite" : "favorite-border"}
+                  size={18}
+                  color={isFavorite ? "#FF6B9D" : "#FFFFFF"}
+                />
+              </TouchableOpacity>
+            )}
+
+            {/* Image Indicators */}
+            {images.length > 1 && (
+              <View style={styles.indicators}>
+                {images.slice(0, 3).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[styles.dot, i === imageIndex && styles.activeDot]}
+                  />
+                ))}
+              </View>
+            )}
+
+            {/* Video Preview */}
+            {videoUrl && (
+              <TouchableOpacity
+                style={styles.videoThumbnail}
+                onPress={openVideoModal}
+              >
+                <Video
+                  ref={videoPreviewRef}
+                  source={{ uri: videoUrl }}
+                  style={styles.videoPreview}
+                  resizeMode={ResizeMode.COVER}
+                  shouldPlay={true}
+                  isLooping={true}
+                  isMuted={true}
+                />
+                <View style={styles.videoOverlay} />
+                <MaterialIcons name="play-arrow" size={20} color="#FFF" />
+              </TouchableOpacity>
+            )}
+          </>
+        ) : (
+          <View style={styles.placeholderImage}>
+            <MaterialIcons name="home" size={32} color="#CBD5E1" />
+          </View>
+        )}
+      </View>
+
+      {/* Content */}
+      <View style={styles.content}>
+        {/* Title & Price Row */}
+        <View style={styles.headerRow}>
+          <View style={styles.titleSection}>
+            <Text style={styles.title} numberOfLines={1}>
+              {propertyTitle}
+            </Text>
+            <Text style={styles.specs}>{getPropertySpecs()}</Text>
+          </View>
+          <Text style={styles.price}>{formatPrice(price)} MRU</Text>
+        </View>
+
+        {/* Location */}
+        <View style={styles.locationRow}>
+          <MaterialIcons name="location-on" size={12} color="#94A3B8" />
+          <Text style={styles.location}>{getLocation()}</Text>
+        </View>
+
+        {/* Footer Actions */}
+        <View style={styles.footer}>
+          <View>
+            {property.organization?.name && (
+              <Text style={styles.agencyName} numberOfLines={1}>
+                {property.organization.name}
+              </Text>
+            )}
+          </View>
+
+          <View style={styles.actionRow}>
+            {onCall && property.organization?.phone && (
+              <TouchableOpacity
+                style={styles.callBtn}
+                onPress={() => onCall(property.organization?.phone)}
+              >
+                <MaterialIcons name="phone" size={14} color="#FFF" />
+              </TouchableOpacity>
+            )}
+
+            {onEmail && property.organization?.website && (
+              <TouchableOpacity
+                style={styles.emailBtn}
+                onPress={() => onEmail(property.organization?.website)}
+              >
+                <MaterialIcons name="mail" size={14} color="#0066CC" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </View>
+
+      {/* Video Modal */}
+      <Modal
+        visible={videoModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={closeVideoModal}
+        statusBarTranslucent
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.backdrop} onPress={closeVideoModal} />
+
+          <View style={styles.modalContent}>
+            <TouchableOpacity style={styles.closeBtn} onPress={closeVideoModal}>
+              <MaterialIcons name="close" size={20} color="#FFF" />
+            </TouchableOpacity>
+
+            <Video
+              ref={modalVideoRef}
+              source={{ uri: videoUrl || "" }}
+              style={styles.modalVideo}
+              resizeMode={ResizeMode.CONTAIN}
+              shouldPlay={true}
+              isLooping={false}
+              onPlaybackStatusUpdate={handleVideoStatusUpdate}
+            />
+
+            <View style={styles.controls}>
+              {videoStatus?.isLoaded && (
+                <View style={styles.progressSection}>
+                  <Text style={styles.time}>
+                    {formatTime(videoStatus.positionMillis || 0)}
+                  </Text>
+                  <View style={styles.progressBar}>
+                    <View
+                      style={[
+                        styles.progress,
+                        {
+                          width: `${
+                            ((videoStatus.positionMillis || 0) /
+                              (videoStatus.durationMillis || 1)) *
+                            100
+                          }%`
+                        }
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.time}>
+                    {formatTime(videoStatus.durationMillis || 0)}
+                  </Text>
+                </View>
+              )}
+
+              <View style={styles.playerControls}>
+                <TouchableOpacity onPress={() => seekVideo("backward")}>
+                  <MaterialIcons name="replay-10" size={24} color="#FFF" />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.playBtn}
+                  onPress={togglePlayPause}
+                >
+                  <MaterialIcons
+                    name={isPlaying ? "pause" : "play-arrow"}
+                    size={28}
+                    color="#FFF"
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={() => seekVideo("forward")}>
+                  <MaterialIcons name="forward-10" size={24} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <Text style={styles.modalTitle}>{propertyTitle}</Text>
+          </View>
+        </View>
+      </Modal>
+    </TouchableOpacity>
+  );
+};
+
+const styles = StyleSheet.create({
+  card: {
+    marginBottom: 12,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 12,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3
+  },
+
+  imageContainer: {
+    position: "relative",
+    height: IMAGE_HEIGHT,
+    backgroundColor: "#F1F5F9"
+  },
+
+  imageWrapper: {
+    width: CARD_WIDTH,
+    height: IMAGE_HEIGHT,
+    flexShrink: 0 // CRITICAL for Android: Prevent shrinking
+  },
+
+  propertyImage: {
+    width: CARD_WIDTH,
+    height: IMAGE_HEIGHT,
+    flexShrink: 0 // CRITICAL for Android: Prevent shrinking
+  },
+
+  placeholderImage: {
+    width: CARD_WIDTH,
+    height: IMAGE_HEIGHT,
+    backgroundColor: "#F1F5F9",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  skeletonContainer: {
+    width: CARD_WIDTH,
+    height: IMAGE_HEIGHT,
+    backgroundColor: "#E2E8F0",
+    overflow: "hidden"
+  },
+
+  skeletonShimmer: {
+    position: "absolute",
+    backgroundColor: "rgba(255, 255, 255, 0.4)"
+  },
+
+  favoriteButton: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  indicators: {
+    position: "absolute",
+    bottom: 8,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: 4
+  },
+
+  dot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: "rgba(255, 255, 255, 0.5)"
+  },
+
+  activeDot: {
+    backgroundColor: "#FFFFFF",
+    width: 12
+  },
+
+  videoThumbnail: {
+    position: "absolute",
+    bottom: 8,
+    left: 8,
+    width: 60,
+    height: 80,
+    borderRadius: 6,
+    overflow: "hidden",
+    borderWidth: 1.5,
+    borderColor: "#FFF",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  videoPreview: {
+    width: "100%",
+    height: "100%"
+  },
+
+  videoOverlay: {
+    position: "absolute",
+    inset: 0,
+    backgroundColor: "rgba(0, 0, 0, 0.3)"
+  },
+
+  content: {
+    padding: 10
+  },
+
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 6,
+    gap: 8
+  },
+
+  titleSection: {
+    flex: 1
+  },
+
+  title: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#1E293B",
+    marginBottom: 2
+  },
+
+  specs: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "500"
+  },
+
+  price: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#000",
+    flexShrink: 0
+  },
+
+  locationRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 8
+  },
+
+  location: {
+    fontSize: 11,
+    color: "#94A3B8",
+    flex: 1
+  },
+
+  footer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0"
+  },
+
+  agencyName: {
+    fontSize: 11,
+    color: "#64748B",
+    fontWeight: "600"
+  },
+
+  actionRow: {
+    flexDirection: "row",
+    gap: 6
+  },
+
+  callBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  emailBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 6,
+    backgroundColor: "#F0F4F8",
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  // Modal
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "#000",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  backdrop: {
+    ...StyleSheet.absoluteFillObject
+  },
+
+  modalContent: {
+    width: "100%",
+    alignItems: "center"
+  },
+
+  closeBtn: {
+    position: "absolute",
+    top: 40,
+    right: 16,
+    zIndex: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  modalVideo: {
+    width: screenWidth,
+    height: screenWidth * 0.7
+  },
+
+  controls: {
+    width: "100%",
+    paddingHorizontal: 16,
+    paddingTop: 16
+  },
+
+  progressSection: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 16
+  },
+
+  progressBar: {
+    flex: 1,
+    height: 4,
+    backgroundColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 2,
+    overflow: "hidden"
+  },
+
+  progress: {
+    height: "100%",
+    backgroundColor: "#FFF"
+  },
+
+  time: {
+    fontSize: 10,
+    color: "rgba(255, 255, 255, 0.7)",
+    fontWeight: "600",
+    minWidth: 35
+  },
+
+  playerControls: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 32,
+    marginBottom: 16
+  },
+
+  playBtn: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: "rgba(255, 255, 255, 0.15)",
+    justifyContent: "center",
+    alignItems: "center"
+  },
+
+  modalTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#FFF",
+    textAlign: "center",
+    paddingHorizontal: 16,
+    marginTop: 8
+  }
+});

@@ -1,0 +1,102 @@
+{
+  "expo": {
+    "name": "Meskeny - مسكني",
+    "slug": "habitat",
+    "version": "1.4.53",
+    "orientation": "portrait",
+    "icon": "./assets/logo.png",
+    "scheme": "com.jeremypersing.apartmentsclone",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-notifications",
+      "expo-asset",
+      "expo-font",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-localization",
+      "./plugins/withRemoveStoragePermissions.js",
+      "@bacons/apple-targets",
+      "@maplibre/maplibre-react-native"
+    ],
+    "experiments": {
+      "reactNativeNewArchitecture": true
+    },
+    "splash": {
+      "image": "./assets/Splash.png",
+      "_comment_resizeMode": "cover fills the entire screen — no white bars on any device ratio.",
+      "resizeMode": "cover",
+      "backgroundColor": "#FAEFE9"
+    },
+    "updates": {
+      "_comment": "0 = never wait for an OTA update on launch. App opens instantly from cache.",
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.jeremypersing.apartmentsclone",
+      "entitlements": {
+        "aps-environment": "production"
+      },
+      "config": {
+        "googleMapsApiKey": "AIzaSyDMVJYe9H8uHWPQ7toM5WBCNEuqVmGzvgE"
+      },
+      "infoPlist": {
+        "NSCameraUsageDescription": "Meskeny requests camera access to let you photograph and record property listings, and for profile and identity verification.",
+        "NSPhotoLibraryAddUsageDescription": "Meskeny needs permission to save property photos and videos to your device.",
+        "NSPhotoLibraryUsageDescription": "Meskeny needs access to your photo library to let you upload property images and profile photos.",
+        "NSLocationWhenInUseUsageDescription": "Meskeny uses your location to show properties near you and provide accurate map views. Your location is never shared with third parties.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Meskeny uses your location to show nearby properties.",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsArbitraryLoadsInWebContent": true,
+          "NSAllowsLocalNetworking": true
+        },
+        "UILaunchStoryboardName": "SplashScreen",
+        "_comment_backgroundModes": "Required for socket keepalive and background uploads.",
+        "UIBackgroundModes": [
+          "fetch",
+          "remote-notification"
+        ],
+        "CADisableMinimumFrameDurationOnPhone": true
+      }
+    },
+    "android": {
+      "package": "com.jeremypersing.apartmentsclone",
+      "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDMVJYe9H8uHWPQ7toM5WBCNEuqVmGzvgE"
+        }
+      },
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/logo.png",
+        "backgroundColor": "#FAEFE9"
+      },
+      "versionCode": 21,
+      "permissions": [],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "_comment_softwareKeyboardLayoutMode": "pan = content shifts up; resize = layout shrinks. pan avoids layout jumps.",
+      "softwareKeyboardLayoutMode": "pan"
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png",
+      "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "82af1c44-83c2-4fd0-8ea9-6f192a0f752e"
+      }
+    },
+    "owner": "isakay-kalo1",
+    "newArchEnabled": true
+  }
+}

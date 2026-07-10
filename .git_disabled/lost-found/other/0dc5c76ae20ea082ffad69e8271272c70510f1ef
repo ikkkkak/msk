@@ -1,0 +1,321 @@
+import { useMutation, useQueryClient } from "react-query";
+import axios from "axios";
+import { useUser } from "../useUser";
+import { queryKeys, endpoints } from "../../constants";
+
+export const useLikePropertySaleVideoMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (videoID: number) => {
+      if (!user?.accessToken) {
+        throw new Error('Authentication required');
+      }
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/${videoID}/like`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${user.accessToken}` },
+        }
+      );
+      return { videoID, likesCount: response.data?.likesCount, liked: true };
+    },
+    {
+      // CRITICAL: Update query cache directly instead of invalidating to maintain feed stability
+      onSuccess: (data) => {
+        // Update cursor-based feed cache
+        queryClient.setQueryData(['cursorVideoFeed', 'sale', user?.ID], (old: any) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page: any) => ({
+              ...page,
+              videos: page.videos.map((v: any) => {
+                // Handle both numeric IDs and string IDs like "123_0"
+                const vStableId = typeof v.ID === 'string' 
+                  ? parseInt(v.ID.split('_')[0], 10)
+                  : Number(v.ID);
+                if (vStableId === data.videoID) {
+                  return { 
+                    ...v, 
+                    likesCount: data.likesCount ?? (v.likesCount ?? 0) + 1,
+                    liked: true // CRITICAL: Set liked to true
+                  };
+                }
+                return v;
+              })
+            }))
+          };
+        });
+      },
+    }
+  );
+};
+
+export const useUnlikePropertySaleVideoMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (videoID: number) => {
+      if (!user?.accessToken) {
+        throw new Error('Authentication required');
+      }
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/${videoID}/unlike`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${user.accessToken}` },
+        }
+      );
+      return { videoID, likesCount: response.data?.likesCount, liked: false };
+    },
+    {
+      // CRITICAL: Update query cache directly instead of invalidating to maintain feed stability
+      onSuccess: (data) => {
+        // Update cursor-based feed cache
+        queryClient.setQueryData(['cursorVideoFeed', 'sale', user?.ID], (old: any) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page: any) => ({
+              ...page,
+              videos: page.videos.map((v: any) => {
+                // Handle both numeric IDs and string IDs like "123_0"
+                const vStableId = typeof v.ID === 'string' 
+                  ? parseInt(v.ID.split('_')[0], 10)
+                  : Number(v.ID);
+                if (vStableId === data.videoID) {
+                  return { 
+                    ...v, 
+                    likesCount: data.likesCount ?? Math.max(0, (v.likesCount ?? 0) - 1),
+                    liked: false // CRITICAL: Set liked to false
+                  };
+                }
+                return v;
+              })
+            }))
+          };
+        });
+      },
+    }
+  );
+};
+
+export const useSavePropertySaleVideoMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (videoID: number) => {
+      if (!user?.accessToken) {
+        throw new Error('Authentication required');
+      }
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/${videoID}/save`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${user.accessToken}` },
+        }
+      );
+      return { videoID, savesCount: response.data?.savesCount, saved: true };
+    },
+    {
+      // CRITICAL: Update query cache directly to maintain feed stability AND persist state
+      onSuccess: (data) => {
+        // Update cursor-based feed cache
+        queryClient.setQueryData(['cursorVideoFeed', 'sale', user?.ID], (old: any) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page: any) => ({
+              ...page,
+              videos: page.videos.map((v: any) => {
+                // Handle both numeric IDs and string IDs like "123_0"
+                const vStableId = typeof v.ID === 'string' 
+                  ? parseInt(v.ID.split('_')[0], 10)
+                  : Number(v.ID);
+                if (vStableId === data.videoID) {
+                  return { 
+                    ...v, 
+                    savesCount: data.savesCount ?? (v.savesCount ?? 0) + 1,
+                    saved: true // CRITICAL: Set saved to true
+                  };
+                }
+                return v;
+              })
+            }))
+          };
+        });
+      },
+    }
+  );
+};
+
+export const useUnsavePropertySaleVideoMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (videoID: number) => {
+      if (!user?.accessToken) {
+        throw new Error('Authentication required');
+      }
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/${videoID}/unsave`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${user.accessToken}` },
+        }
+      );
+      return { videoID, savesCount: response.data?.savesCount, saved: false };
+    },
+    {
+      // CRITICAL: Update query cache directly to maintain feed stability AND persist state
+      onSuccess: (data) => {
+        // Update cursor-based feed cache
+        queryClient.setQueryData(['cursorVideoFeed', 'sale', user?.ID], (old: any) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page: any) => ({
+              ...page,
+              videos: page.videos.map((v: any) => {
+                // Handle both numeric IDs and string IDs like "123_0"
+                const vStableId = typeof v.ID === 'string' 
+                  ? parseInt(v.ID.split('_')[0], 10)
+                  : Number(v.ID);
+                if (vStableId === data.videoID) {
+                  return { 
+                    ...v, 
+                    savesCount: data.savesCount ?? Math.max(0, (v.savesCount ?? 0) - 1),
+                    saved: false // CRITICAL: Set saved to false
+                  };
+                }
+                return v;
+              })
+            }))
+          };
+        });
+      },
+    }
+  );
+};
+
+export const useCreatePropertySaleVideoCommentMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async ({ videoID, content, parentID }: { videoID: number; content: string; parentID?: number }) => {
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/${videoID}/comments`,
+        { content, parentID },
+        {
+          headers: { Authorization: `Bearer ${user?.accessToken}` },
+        }
+      );
+      return response.data;
+    },
+    {
+      onSuccess: (_, variables) => {
+        // Invalidate property sale video feed queries
+        queryClient.invalidateQueries(queryKeys.propertySaleVideoFeed());
+        queryClient.invalidateQueries(['propertySaleVideoComments', variables.videoID]);
+      },
+    }
+  );
+};
+
+export const useUpdatePropertySaleVideoCommentMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async ({ commentID, content }: { commentID: number; content: string }) => {
+      const response = await axios.put(
+        `${endpoints.baseURL}/property-sale-videos/comments/${commentID}`,
+        { content },
+        {
+          headers: { Authorization: `Bearer ${user?.accessToken}` },
+        }
+      );
+      return response.data;
+    },
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['propertySaleVideoComments']);
+      },
+    }
+  );
+};
+
+export const useDeletePropertySaleVideoCommentMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async ({ commentID }: { commentID: number; videoID: number }) => {
+      await axios.delete(
+        `${endpoints.baseURL}/property-sale-videos/comments/${commentID}`,
+        {
+          headers: { Authorization: `Bearer ${user?.accessToken}` },
+        }
+      );
+      return { commentID };
+    },
+    {
+      onSuccess: (_, variables) => {
+        queryClient.invalidateQueries(['propertySaleVideoComments', variables.videoID]);
+        queryClient.invalidateQueries(queryKeys.propertySaleVideoFeed());
+      },
+    }
+  );
+};
+
+export const useLikePropertySaleVideoCommentMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (commentID: number) => {
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/comments/${commentID}/like`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${user?.accessToken}` },
+        }
+      );
+      return { commentID, likesCount: response.data?.likesCount };
+    },
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['propertySaleVideoComments']);
+      },
+    }
+  );
+};
+
+export const useUnlikePropertySaleVideoCommentMutation = () => {
+  const { user } = useUser();
+  const queryClient = useQueryClient();
+
+  return useMutation(
+    async (commentID: number) => {
+      const response = await axios.post(
+        `${endpoints.baseURL}/property-sale-videos/comments/${commentID}/unlike`,
+        {},
+        {
+          headers: { Authorization: `Bearer ${user?.accessToken}` },
+        }
+      );
+      return { commentID, likesCount: response.data?.likesCount };
+    },
+    {
+      onSuccess: () => {
+        queryClient.invalidateQueries(['propertySaleVideoComments']);
+      },
+    }
+  );
+};

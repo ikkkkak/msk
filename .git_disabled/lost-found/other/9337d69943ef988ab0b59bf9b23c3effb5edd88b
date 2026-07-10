@@ -1,0 +1,793 @@
+/**
+ * MapLandmarks Component - Airbnb Style
+ * Clean, professional map for Landmarks/Lands
+ * High-performance with viewport filtering and smooth animations
+ */
+
+import React, {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef
+} from "react";
+import {
+  View,
+  StyleSheet,
+  Platform,
+  Pressable,
+  Text,
+  Image,
+  Dimensions
+} from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import { MaterialCommunityIcons, MaterialIcons } from "@expo/vector-icons";
+import MapView, { Region, Polygon, Marker } from "react-native-maps";
+import * as Haptics from "expo-haptics";
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withSpring,
+  Easing,
+  interpolate,
+  Extrapolation
+} from "react-native-reanimated";
+import { theme } from "../theme";
+
+const SCREEN_WIDTH = Dimensions.get("window").width;
+const EASING = Easing.bezier(0.4, 0.0, 0.2, 1);
+const DURATION = 300;
+
+// =============================================================================
+// UTILITIES - Performance optimization
+// =============================================================================
+
+// Calculate visible landmarks based on region (viewport culling)
+const getVisibleLandmarks = (
+  landmarks: Landmark[],
+  region: Region,
+  padding: number = 0.15
+) => {
+  const minLat = region.latitude - region.latitudeDelta * (1 + padding);
+  const maxLat = region.latitude + region.latitudeDelta * (1 + padding);
+  const minLng = region.longitude - region.longitudeDelta * (1 + padding);
+  const maxLng = region.longitude + region.longitudeDelta * (1 + padding);
+
+  return landmarks.filter((landmark) => {
+    const center = getLandmarkCenterCoords(landmark);
+    if (!center) return false;
+    return (
+      center.latitude >= minLat &&
+      center.latitude <= maxLat &&
+      center.longitude >= minLng &&
+      center.longitude <= maxLng
+    );
+  });
+};
+
+// Get landmark center coordinates (memoized helper)
+const getLandmarkCenterCoords = (
+  landmark: Landmark
+): { latitude: number; longitude: number } | null => {
+  const points = [
+    { lat: landmark.point1_lat, lng: landmark.point1_lng },
+    { lat: landmark.point2_lat, lng: landmark.point2_lng },
+    { lat: landmark.point3_lat, lng: landmark.point3_lng },
+    { lat: landmark.point4_lat, lng: landmark.point4_lng }
+  ].filter((p) => p.lat && p.lng && !isNaN(p.lat) && !isNaN(p.lng));
+
+  if (points.length === 0) return null;
+
+  const avgLat =
+    points.reduce((sum, p) => sum + (p.lat || 0), 0) / points.length;
+  const avgLng =
+    points.reduce((sum, p) => sum + (p.lng || 0), 0) / points.length;
+
+  return { latitude: avgLat, longitude: avgLng };
+};
+
+// Landmark type
+interface Landmark {
+  id: number;
+  title?: string;
+  name?: string;
+  price?: number;
+  surface_area?: number;
+  area?: number;
+  area_unit?: string;
+  point1_lat?: number;
+  point1_lng?: number;
+  point2_lat?: number;
+  point2_lng?: number;
+  point3_lat?: number;
+  point3_lng?: number;
+  point4_lat?: number;
+  point4_lng?: number;
+  lat?: number;
+  lng?: number;
+  images?: string[];
+  zone_name?: string;
+  city_name?: string;
+  land_type?: string;
+  zoning?: string;
+  organization?: { name?: string };
+}
+
+// =============================================================================
+// LANDMARK POLYGON MARKER - Optimized with memoization
+// =============================================================================
+const LandmarkPolygon = React.memo(
+  ({
+    landmark,
+    isSelected,
+    onPress
+  }: {
+    landmark: Landmark;
+    isSelected: boolean;
+    onPress: () => void;
+  }) => {
+    // Memoize coordinates to prevent recalculation
+    const coordinates = useMemo(() => {
+      const coords = [
+        {
+          latitude: landmark.point1_lat || 0,
+          longitude: landmark.point1_lng || 0
+        },
+        {
+          latitude: landmark.point2_lat || 0,
+          longitude: landmark.point2_lng || 0
+        },
+        {
+          latitude: landmark.point3_lat || 0,
+          longitude: landmark.point3_lng || 0
+        },
+        {
+          latitude: landmark.point4_lat || 0,
+          longitude: landmark.point4_lng || 0
+        }
+      ];
+
+      // Validate coordinates
+      const isValid = coords.every(
+        (c) =>
+          c.latitude !== 0 &&
+          c.longitude !== 0 &&
+          !isNaN(c.latitude) &&
+          !isNaN(c.longitude)
+      );
+
+      return isValid ? coords : null;
+    }, [
+      landmark.point1_lat,
+      landmark.point1_lng,
+      landmark.point2_lat,
+      landmark.point2_lng,
+      landmark.point3_lat,
+      landmark.point3_lng,
+      landmark.point4_lat,
+      landmark.point4_lng
+    ]);
+
+    if (!coordinates) return null;
+
+    return (
+      <Polygon
+        coordinates={coordinates}
+        fillColor={
+          isSelected ? "rgba(0, 166, 153, 0.4)" : "rgba(0, 166, 153, 0.25)"
+        }
+        strokeColor={isSelected ? "#00A699" : "rgba(0, 166, 153, 0.6)"}
+        strokeWidth={isSelected ? 2.5 : 1.5}
+        tappable={true}
+        onPress={onPress}
+      />
+    );
+  },
+  (prevProps, nextProps) => {
+    // Only re-render if selection or landmark ID changes
+    return (
+      prevProps.isSelected === nextProps.isSelected &&
+      prevProps.landmark.id === nextProps.landmark.id
+    );
+  }
+);
+
+// =============================================================================
+// AIRBNB-STYLE LANDMARK CARD - Professional design
+// =============================================================================
+const LandmarkCard = React.memo(
+  ({
+    landmark,
+    onPress,
+    onClose
+  }: {
+    landmark: Landmark;
+    onPress: () => void;
+    onClose: () => void;
+  }) => {
+    const formatPrice = (p: number) => {
+      if (p >= 1000000) return `${(p / 1000000).toFixed(1)}M`;
+      if (p >= 1000) return `${(p / 1000).toFixed(0)}K`;
+      return p?.toLocaleString() || "0";
+    };
+
+    const imageUrl =
+      Array.isArray(landmark.images) && landmark.images.length > 0
+        ? landmark.images[0]
+        : null;
+
+    return (
+      <View style={styles.cardWrapper}>
+        {/* Close Button */}
+        <Pressable style={styles.closeBtn} onPress={onClose} hitSlop={12}>
+          <MaterialIcons name="close" size={18} color="#222" />
+        </Pressable>
+
+        {/* Main Card */}
+        <Pressable style={styles.card} onPress={onPress}>
+          {/* Image Section - Airbnb style */}
+          <View style={styles.cardImageContainer}>
+            {imageUrl ? (
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.cardImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.cardImagePlaceholder}>
+                <MaterialIcons name="landscape" size={32} color="#00A699" />
+              </View>
+            )}
+          </View>
+
+          {/* Content Section */}
+          <View style={styles.cardContent}>
+            <Text style={styles.cardTitle} numberOfLines={1}>
+              {landmark.title || landmark.name || "Land Plot"}
+            </Text>
+
+            {landmark.price && (
+              <Text style={styles.cardPrice}>
+                {formatPrice(landmark.price)} MRU
+              </Text>
+            )}
+
+            <View style={styles.cardDetailsRow}>
+              {(landmark.surface_area || landmark.area) && (
+                <View style={styles.cardDetailItem}>
+                  <MaterialIcons name="square-foot" size={14} color="#717171" />
+                  <Text style={styles.cardDetailText}>
+                    {landmark.surface_area || landmark.area}
+                    {landmark.area_unit || "m²"}
+                  </Text>
+                </View>
+              )}
+              {landmark.zone_name && (
+                <View style={styles.cardDetailItem}>
+                  <MaterialIcons name="location-on" size={14} color="#717171" />
+                  <Text style={styles.cardDetailText} numberOfLines={1}>
+                    {landmark.zone_name}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+        </Pressable>
+      </View>
+    );
+  },
+  (prevProps, nextProps) => {
+    return (
+      prevProps.landmark.id === nextProps.landmark.id &&
+      prevProps.landmark.price === nextProps.landmark.price
+    );
+  }
+);
+
+// =============================================================================
+// MAIN MAP LANDMARKS COMPONENT - High Performance
+// =============================================================================
+export const MapLandmarks = ({
+  landmarks,
+  mapRef,
+  initialRegion,
+  onLandmarkSelect,
+  onMapPress,
+  selectedLandmarkId,
+  mapType: mapTypeProp = "satellite",
+  districtBoundaries,
+  showZones: showZonesProp = true,
+  onRegionChange
+}: {
+  landmarks: Landmark[];
+  mapRef: React.MutableRefObject<MapView | null>;
+  initialRegion?: Region;
+  onLandmarkSelect?: (landmarkId: number, index: number) => void;
+  onMapPress?: (coordinate: { latitude: number; longitude: number }) => void;
+  selectedLandmarkId?: number | null;
+  mapType?: "standard" | "satellite" | "hybrid" | "terrain";
+  districtBoundaries?: Array<{
+    name: string;
+    coordinates: Array<{ latitude: number; longitude: number }>;
+  }>;
+  showZones?: boolean;
+  onRegionChange?: (region: Region) => void;
+}) => {
+  const navigation = useNavigation();
+
+  // Use ref for region to prevent re-renders, but track changes for viewport filtering
+  const regionRef = useRef<Region>(
+    initialRegion || {
+      latitude: 18.117022,
+      longitude: -15.949858,
+      latitudeDelta: 0.4,
+      longitudeDelta: 0.4
+    }
+  );
+  const initialRegionRef = useRef<Region>(regionRef.current);
+  const [regionKey, setRegionKey] = useState(0); // Trigger viewport updates
+
+  // State - Minimal state to prevent re-renders
+  const [zonesVisible, setZonesVisible] = useState(showZonesProp ?? true);
+  // CRITICAL: Ensure mapType is always a valid string (Android requirement)
+  const [mapType, setMapType] = useState<"standard" | "satellite">(
+    mapTypeProp === "standard" || mapTypeProp === "satellite"
+      ? mapTypeProp
+      : "satellite"
+  );
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [isInteracting, setIsInteracting] = useState(false);
+
+  // Animations - DISABLED on Android to prevent crashes
+  // On Android, start with final values (no animations)
+  const cardOpacity = useSharedValue(Platform.OS === "android" ? 1 : 0);
+  const cardTranslateY = useSharedValue(Platform.OS === "android" ? 0 : 20);
+  const cardScale = useSharedValue(Platform.OS === "android" ? 1 : 0.95);
+
+  const cardAnimStyle = useAnimatedStyle(() => {
+    // On Android, return static values (no animations)
+    if (Platform.OS === "android") {
+      return {
+        opacity: 1,
+        transform: [{ translateY: 0 }, { scale: 1 }]
+      };
+    }
+    // iOS: Use smooth animations
+    return {
+      opacity: cardOpacity.value,
+      transform: [
+        { translateY: cardTranslateY.value },
+        { scale: cardScale.value }
+      ]
+    };
+  });
+
+  // Sync props
+  useEffect(() => {
+    if (showZonesProp !== undefined) setZonesVisible(showZonesProp);
+  }, [showZonesProp]);
+
+  useEffect(() => {
+    // CRITICAL: Always ensure valid mapType value (Android requirement)
+    if (mapTypeProp === "standard" || mapTypeProp === "satellite") {
+      setMapType(mapTypeProp);
+    }
+  }, [mapTypeProp]);
+
+  // Memoize safe landmarks array
+  const safeLandmarks = useMemo(() => {
+    return Array.isArray(landmarks) ? landmarks : [];
+  }, [landmarks]);
+
+  // Memoize landmark centers for viewport filtering
+  const landmarkCenters = useMemo(() => {
+    return safeLandmarks
+      .map((landmark) => ({
+        landmark,
+        center: getLandmarkCenterCoords(landmark)
+      }))
+      .filter((item) => item.center !== null);
+  }, [safeLandmarks]);
+
+  // Viewport filtering - Only render visible landmarks
+  const visibleLandmarks = useMemo(() => {
+    return getVisibleLandmarks(safeLandmarks, regionRef.current, 0.15);
+  }, [safeLandmarks, regionKey]);
+
+  // Computed selected index
+  const selectedIndex = useMemo(() => {
+    if (selectedLandmarkId != null) {
+      return safeLandmarks.findIndex((l) => l.id === selectedLandmarkId);
+    }
+    return activeIndex;
+  }, [selectedLandmarkId, activeIndex, safeLandmarks]);
+
+  // Memoize district boundaries centers
+  const districtCenters = useMemo(() => {
+    if (!Array.isArray(districtBoundaries)) return [];
+    return districtBoundaries
+      .map((district) => {
+        const coords = district.coordinates || [];
+        if (coords.length === 0) return null;
+        const centerLat =
+          coords.reduce((sum: number, c: any) => sum + c.latitude, 0) /
+          coords.length;
+        const centerLng =
+          coords.reduce((sum: number, c: any) => sum + c.longitude, 0) /
+          coords.length;
+        return { district, centerLat, centerLng };
+      })
+      .filter((item) => item !== null);
+  }, [districtBoundaries]);
+
+  // Animation triggers - DISABLED on Android to prevent crashes
+  useEffect(() => {
+    const hasSelection = selectedLandmarkId != null || activeIndex > -1;
+
+    // On Android, set values directly without animations
+    if (Platform.OS === "android") {
+      cardOpacity.value = hasSelection ? 1 : 0;
+      cardTranslateY.value = hasSelection ? 0 : 20;
+      cardScale.value = hasSelection ? 1 : 0.95;
+      return;
+    }
+
+    // iOS: Use smooth animations
+    cardOpacity.value = withTiming(hasSelection ? 1 : 0, {
+      duration: DURATION,
+      easing: EASING
+    });
+    cardTranslateY.value = withSpring(hasSelection ? 0 : 20, {
+      damping: 15,
+      stiffness: 150
+    });
+    cardScale.value = withSpring(hasSelection ? 1 : 0.95, {
+      damping: 15,
+      stiffness: 150
+    });
+  }, [selectedLandmarkId, activeIndex, cardOpacity, cardTranslateY, cardScale]);
+
+  // Handlers - Optimized with useCallback
+  const dismissCard = useCallback(() => {
+    setActiveIndex(-1);
+    onMapPress?.({ latitude: 0, longitude: 0 });
+    if (!onLandmarkSelect && navigation) {
+      navigation.setOptions({ tabBarStyle: { display: "flex" } });
+    }
+  }, [onMapPress, onLandmarkSelect, navigation]);
+
+  const handleMapPress = useCallback(
+    (e: any) => {
+      dismissCard();
+    },
+    [dismissCard]
+  );
+
+  const handleRegionChange = useCallback(
+    (newRegion: Region) => {
+      // Update ref and trigger viewport update
+      regionRef.current = newRegion;
+      setRegionKey((prev) => prev + 1); // Trigger viewport filtering update
+      onRegionChange?.(newRegion);
+    },
+    [onRegionChange]
+  );
+
+  const handleLandmarkPress = useCallback(
+    (index: number) => {
+      const landmark = safeLandmarks[index];
+      if (!landmark) return;
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+
+      if (onLandmarkSelect) {
+        onLandmarkSelect(landmark.id, index);
+        return;
+      }
+
+      setActiveIndex(index);
+      if (navigation) {
+        navigation.setOptions({ tabBarStyle: { display: "none" } });
+      }
+
+      const center = getLandmarkCenterCoords(landmark);
+      if (center && mapRef?.current) {
+        mapRef.current.animateToRegion(
+          {
+            latitude: center.latitude,
+            longitude: center.longitude,
+            latitudeDelta: Math.min(regionRef.current.latitudeDelta, 0.02),
+            longitudeDelta: Math.min(regionRef.current.longitudeDelta, 0.02)
+          },
+          350
+        );
+      }
+    },
+    [safeLandmarks, onLandmarkSelect, navigation, mapRef]
+  );
+
+  const toggleZones = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setZonesVisible((prev) => !prev);
+  }, []);
+
+  const toggleMapType = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setMapType((prev) => (prev === "standard" ? "satellite" : "standard"));
+  }, []);
+
+  return (
+    <View style={styles.container}>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        mapType={mapType || "satellite"}
+        initialRegion={initialRegionRef.current}
+        onPress={handleMapPress}
+        onPanDragStart={() => setIsInteracting(true)}
+        onPanDragEnd={() => setIsInteracting(false)}
+        onRegionChangeComplete={handleRegionChange}
+        userInterfaceStyle="light"
+        pitchEnabled={false}
+        rotateEnabled={false}
+        showsCompass={false}
+        showsScale={false}
+        toolbarEnabled={false}
+        moveOnMarkerPress={false}
+      >
+        {/* District Zones - Memoized */}
+        {Array.isArray(districtCenters) &&
+          districtCenters.map((item, idx) => {
+            if (!item) return null;
+            const { district, centerLat, centerLng } = item;
+            return (
+              <React.Fragment key={`zone-${idx}`}>
+                <Polygon
+                  coordinates={district.coordinates}
+                  strokeColor={
+                    zonesVisible ? "rgba(80, 80, 80, 0.35)" : "transparent"
+                  }
+                  fillColor={
+                    zonesVisible ? "rgba(0, 166, 153, 0.03)" : "transparent"
+                  }
+                  strokeWidth={zonesVisible ? 1.5 : 0}
+                  tappable={false}
+                />
+                {zonesVisible && (
+                  <Marker
+                    coordinate={{ latitude: centerLat, longitude: centerLng }}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    tracksViewChanges={false}
+                    zIndex={1}
+                  >
+                    <Text style={styles.districtLabelText}>
+                      {district.name}
+                    </Text>
+                  </Marker>
+                )}
+              </React.Fragment>
+            );
+          })}
+
+        {/* Landmark Polygons - Viewport filtered for performance */}
+        {!isInteracting &&
+          Array.isArray(visibleLandmarks) &&
+          visibleLandmarks.map((landmark) => {
+            const idx = safeLandmarks.findIndex((l) => l.id === landmark.id);
+            return (
+              <LandmarkPolygon
+                key={`landmark-${landmark.id}`}
+                landmark={landmark}
+                isSelected={selectedIndex === idx}
+                onPress={() => handleLandmarkPress(idx)}
+              />
+            );
+          })}
+      </MapView>
+
+      {/* Controls - Airbnb style floating buttons */}
+      <View style={styles.controlsRow}>
+        {Array.isArray(districtBoundaries) && districtBoundaries.length > 0 && (
+          <Pressable
+            style={[
+              styles.controlChip,
+              zonesVisible && styles.controlChipActive
+            ]}
+            onPress={toggleZones}
+          >
+            <MaterialIcons
+              name="layers"
+              size={16}
+              color={zonesVisible ? "#FFF" : "#222"}
+            />
+          </Pressable>
+        )}
+        <Pressable style={styles.controlChip} onPress={toggleMapType}>
+          <MaterialIcons
+            name={mapType === "satellite" ? "map" : "satellite-alt"}
+            size={16}
+            color="#222"
+          />
+        </Pressable>
+      </View>
+
+      {/* Landmark Card - Airbnb style slide-up card */}
+      {selectedIndex >= 0 && selectedIndex < safeLandmarks.length && (
+        <Animated.View style={[styles.cardContainer, cardAnimStyle]}>
+          <LandmarkCard
+            landmark={safeLandmarks[selectedIndex]}
+            onPress={() => {
+              if (navigation && safeLandmarks[selectedIndex]?.id) {
+                (navigation as any).navigate("LandmarkDetails", {
+                  landmarkID: safeLandmarks[selectedIndex].id
+                });
+              }
+            }}
+            onClose={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(
+                () => {}
+              );
+              dismissCard();
+            }}
+          />
+        </Animated.View>
+      )}
+    </View>
+  );
+};
+
+// =============================================================================
+// STYLES - Airbnb Professional Design
+// =============================================================================
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#F5F5F5"
+  },
+  map: {
+    flex: 1
+  },
+
+  // District Labels
+  districtLabelText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#FFF",
+    textShadowColor: "rgba(0,0,0,0.75)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+    backgroundColor: "transparent"
+  },
+
+  // Controls - Floating buttons
+  controlsRow: {
+    position: "absolute",
+    top: 16,
+    right: 16,
+    flexDirection: "row",
+    gap: 8,
+    zIndex: 10
+  },
+  controlChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#FFF",
+    justifyContent: "center",
+    alignItems: "center",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12,
+        shadowRadius: 8
+      },
+      android: { elevation: 4 }
+    })
+  },
+  controlChipActive: {
+    backgroundColor: "#222"
+  },
+
+  // Card Container - Bottom slide-up
+  cardContainer: {
+    position: "absolute",
+    bottom: 16,
+    left: 16,
+    right: 16,
+    zIndex: 1000
+  },
+  cardWrapper: {
+    position: "relative"
+  },
+  closeBtn: {
+    position: "absolute",
+    top: -44,
+    left: 0,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#FFF",
+    justifyContent: "center",
+    alignItems: "center",
+    zIndex: 10,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6
+      },
+      android: { elevation: 5 }
+    })
+  },
+
+  // Card - Airbnb style
+  card: {
+    flexDirection: "row",
+    backgroundColor: "#FFF",
+    borderRadius: 16,
+    overflow: "hidden",
+    minHeight: 120,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12
+      },
+      android: { elevation: 8 }
+    })
+  },
+  cardImageContainer: {
+    width: 140,
+    height: 120,
+    backgroundColor: "#F0F0F0"
+  },
+  cardImage: {
+    width: "100%",
+    height: "100%"
+  },
+  cardImagePlaceholder: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#E8F5F3"
+  },
+  cardContent: {
+    flex: 1,
+    padding: 14,
+    justifyContent: "space-between"
+  },
+  cardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#222",
+    marginBottom: 6,
+    lineHeight: 20
+  },
+  cardPrice: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#222",
+    marginBottom: 8,
+    letterSpacing: -0.3
+  },
+  cardDetailsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 12,
+    alignItems: "center"
+  },
+  cardDetailItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
+  },
+  cardDetailText: {
+    fontSize: 13,
+    color: "#717171",
+    fontWeight: "500"
+  }
+});

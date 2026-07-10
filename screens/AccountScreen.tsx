@@ -1,0 +1,1389 @@
+import {
+  ScrollView,
+  View,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  Alert,
+  Modal,
+  TextInput,
+} from "react-native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import { Text, Button } from "@ui-kitten/components";
+import {
+  User,
+  Camera,
+  CheckCircle,
+  Clock,
+  XCircle,
+  Info,
+  ShieldCheck,
+  UserPlus,
+  House,
+  PlusCircle,
+  ChatCircle,
+  Gear,
+  Heart,
+  Bookmark,
+  Question,
+  FileText,
+  CaretRight,
+  SignOut,
+  ChartBar,
+  SecurityCameraIcon,
+  LockIcon,
+  Plus,
+  Eye,
+} from "phosphor-react-native";
+import ShimmerWaveText from "../components/ShimmerWaveText";
+import { Screen } from "../components/Screen";
+import { SignUpAndSignInButtons } from "../components/SignUpAndSignInButtons";
+import { theme } from "../theme";
+import { ButtonList } from "../components/ButtonList";
+import { useUser } from "../hooks/useUser";
+import { useHostProfile } from "../hooks/useHostProfile";
+import { useUserQuery } from "../hooks/queries/useUserQuery";
+import { useUserProfile } from "../hooks/queries/useUserProfile";
+import { useProfileStatus } from "../hooks/queries/useProfileStatus";
+import { useHostMode } from "../contexts/HostModeContext";
+import { HostModeToggle } from "../components/HostModeToggle";
+import { HostAccessGate } from "../components/HostAccessGate";
+import { useTranslation } from "react-i18next";
+// Language selector removed - app auto-detects language from device
+import { BottomSheetModal } from "@gorhom/bottom-sheet";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AddStoryModal } from "../components/AddStoryModal";
+import axios from "axios";
+import { endpoints } from "../constants";
+import React, { useState, useRef, useCallback } from "react";
+import { BecomeHostCard } from "../components/host-onboarding/BecomeHostCard";
+import { HostOnboardingSheet } from "../components/host-onboarding/HostOnboardingSheet";
+import { AccountVerificationCard } from "../components/account/AccountVerificationCard";
+import { VerifiedBrokerSheet } from "../components/broker/VerifiedBrokerSheet";
+import { useBrokerVerificationStatus } from "../hooks/useBrokerVerification";
+
+export const AccountScreen = () => {
+  const { t } = useTranslation();
+  const { user, logout } = useUser();
+  const { profile } = useHostProfile();
+  const { data: fullUserData, isLoading: isUserLoading } = useUserQuery();
+  const { data: userProfile } = useUserProfile();
+  const { data: profileStatus } = useProfileStatus();
+  const { data: brokerVerification } = useBrokerVerificationStatus(!!user?.ID);
+  const {
+    isHostMode,
+    isLoading: isModeLoading,
+    isTransitioning,
+    switchToHostMode,
+    switchToUserMode,
+  } = useHostMode();
+  const navigation = useNavigation();
+  const [feedbackVisible, setFeedbackVisible] = useState(false);
+  const [fbTitle, setFbTitle] = useState("");
+  const [fbMessage, setFbMessage] = useState("");
+  const [fbRating, setFbRating] = useState<string>("");
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const sheetRef = useRef<BottomSheetModal>(null);
+  const hostOnboardingSheetRef = useRef<BottomSheetModal | null>(null);
+  const verifiedBrokerSheetRef = useRef<BottomSheetModal | null>(null);
+
+  const openVerifiedBrokerSheet = useCallback(() => {
+    verifiedBrokerSheetRef.current?.present();
+  }, []);
+
+  const closeVerifiedBrokerSheet = useCallback(() => {
+    verifiedBrokerSheetRef.current?.dismiss();
+  }, []);
+
+  const openHostOnboarding = useCallback(() => {
+    requestAnimationFrame(() => {
+      hostOnboardingSheetRef.current?.present();
+    });
+  }, []);
+  const [sheetVisible, setSheetVisible] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState("");
+  const [storyModalVisible, setStoryModalVisible] = useState(false);
+  const [hasUserStories, setHasUserStories] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        hostOnboardingSheetRef.current?.dismiss();
+        verifiedBrokerSheetRef.current?.dismiss();
+        setStoryModalVisible(false);
+      };
+    }, []),
+  );
+
+  const handleSubmit = () => {
+    setSheetVisible(false);
+    setName("");
+    setEmail("");
+    setPhone("");
+    setMessage("");
+  };
+  const handleSave = () => {
+    setSheetVisible(false);
+  };
+  // Function to open the sheet (call this from a button press)
+  const openWishlistSheet = () => {
+    sheetRef.current?.present(); // Opens the sheet
+  };
+
+  // Check if current user has stories (for profile header button)
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const checkUserStories = async () => {
+      if (!user?.ID) return;
+      try {
+        const res = await axios.get(`${endpoints.baseURL}/stories/${user.ID}`);
+        if (!cancelled) {
+          const stories = res.data?.stories || [];
+          setHasUserStories(stories.length > 0);
+        }
+      } catch {
+        if (!cancelled) {
+          setHasUserStories(false);
+        }
+      }
+    };
+
+    checkUserStories();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.ID]);
+
+  const getProfileStatus = () => {
+    if (!user)
+      return { status: "none", text: "non_connected", color: "#717171" };
+
+    // Use new profile system if available, otherwise fall back to old system
+    if (userProfile?.profile) {
+      const profile = userProfile.profile;
+      const isVerified = fullUserData?.isVerified === true;
+      const verificationStatus = fullUserData?.verificationStatus || "none";
+
+      if (
+        isVerified &&
+        (verificationStatus === "approved" || verificationStatus === "verified")
+      ) {
+        return {
+          status: "verified",
+          text: "verified",
+          color: "#1F8A70",
+          verificationStatus: verificationStatus,
+        };
+      }
+
+      if (verificationStatus === "pending") {
+        return {
+          status: "pending",
+          text: "verification_pending",
+          color: "#FF8C00",
+          verificationStatus: "pending",
+        };
+      }
+
+      if (verificationStatus === "rejected") {
+        return {
+          status: "rejected",
+          text: "verification_rejected",
+          color: "#FF5A5F",
+          verificationStatus: "rejected",
+        };
+      }
+
+      if (profile.isComplete) {
+        return {
+          status: "complete",
+          text: "profile_complete",
+          color: "#1F8A70",
+          verificationStatus: "none",
+        };
+      }
+
+      if (profile.completionPercentage >= 50) {
+        return {
+          status: "partial",
+          text: "profile_partial",
+          color: "#FF8C00",
+          verificationStatus: "none",
+        };
+      }
+
+      return {
+        status: "incomplete",
+        text: "profile_incomplete",
+        color: "#FF5A5F",
+        verificationStatus: "none",
+      };
+    }
+
+    // Fallback to old system
+    const userData = fullUserData || user;
+
+    // Check basic info (from user object)
+    const hasBasicInfo =
+      userData.firstName && userData.lastName && userData.email;
+
+    // Check profile completion (avatar, bio, date of birth, languages)
+    const hasAvatar = userData.avatarURL || profile.avatarURL;
+    const hasBio = userData.bio || profile.bio;
+    const hasDateOfBirth = userData.dateOfBirth;
+
+    // Handle languages - it could be a JSON string or already an array
+    let hasLanguages = false;
+    if (userData.languages) {
+      try {
+        const userLanguages =
+          typeof userData.languages === "string"
+            ? JSON.parse(userData.languages)
+            : userData.languages;
+        hasLanguages = Array.isArray(userLanguages) && userLanguages.length > 0;
+      } catch {
+        hasLanguages = false;
+      }
+    }
+    if (!hasLanguages && profile.languages) {
+      hasLanguages =
+        Array.isArray(profile.languages) && profile.languages.length > 0;
+    }
+
+    const hasProfile = hasAvatar && hasBio && hasDateOfBirth && hasLanguages;
+
+    // Check verification status
+    const isVerified = userData.isVerified === true;
+    const verificationStatus = userData.verificationStatus || "none";
+
+    // Determine overall status
+    if (isVerified && verificationStatus === "approved") {
+      return {
+        status: "verified",
+        text: "verified",
+        color: "#1F8A70",
+        verificationStatus: "approved",
+      };
+    } else if (verificationStatus === "pending") {
+      return {
+        status: "pending",
+        text: "verification_pending",
+        color: "#FF8C00",
+        verificationStatus: "pending",
+      };
+    } else if (verificationStatus === "rejected") {
+      return {
+        status: "rejected",
+        text: "verification_rejected",
+        color: "#FF5A5F",
+        verificationStatus: "rejected",
+      };
+    } else if (hasProfile) {
+      return {
+        status: "complete",
+        text: "profile_complete",
+        color: "#FF8C00",
+        verificationStatus: "none",
+      };
+    } else if (hasBasicInfo) {
+      return {
+        status: "basic",
+        text: "profile_basic",
+        color: "#FF5A5F",
+        verificationStatus: "none",
+      };
+    } else {
+      return {
+        status: "incomplete",
+        text: "profile_incomplete",
+        color: "#FF5A5F",
+        verificationStatus: "none",
+      };
+    }
+  };
+
+  const currentProfileStatus = getProfileStatus();
+
+  const getProfileButtons = () => {
+    const buttons = [];
+
+    // Always show profile completion if not complete
+    if (
+      currentProfileStatus.status === "incomplete" ||
+      currentProfileStatus.status === "basic"
+    ) {
+      buttons.push({
+        label: t("account.completeProfile"),
+        subtitle: t("account.completeProfileSubtitle"),
+        onPress: () => navigation.navigate("ProfileCreation"),
+        icon: UserPlus,
+        urgent: true,
+      });
+    }
+
+    // Show verification button based on status
+    if (
+      currentProfileStatus.verificationStatus === "none" &&
+      currentProfileStatus.status !== "incomplete" &&
+      currentProfileStatus.status !== "basic"
+    ) {
+      buttons.push({
+        label: t("account.verifyIdentity"),
+        subtitle: t("account.verifyIdentitySubtitle"),
+        onPress: () => navigation.navigate("ProfileVerification"),
+        icon: ShieldCheck,
+        urgent: true,
+      });
+    } else if (currentProfileStatus.verificationStatus === "pending") {
+      buttons.push({
+        label: t("account.verificationPending"),
+        subtitle: t("account.verificationPendingSubtitle"),
+        onPress: () => navigation.navigate("ProfileVerification"),
+        icon: Clock,
+        urgent: false,
+        disabled: true,
+      });
+    } else if (currentProfileStatus.verificationStatus === "rejected") {
+      buttons.push({
+        label: t("account.verificationRejected"),
+        subtitle: t("account.verificationRejectedSubtitle"),
+        onPress: () => navigation.navigate("ProfileVerification"),
+        icon: XCircle,
+        urgent: true,
+      });
+    } else if (
+      currentProfileStatus.verificationStatus === "approved" ||
+      currentProfileStatus.verificationStatus === "verified"
+    ) {
+      buttons.push({
+        label: t("account.identityVerified"),
+        subtitle: t("account.identityVerifiedSubtitle"),
+        onPress: () => {},
+        icon: CheckCircle,
+        urgent: false,
+        disabled: true,
+      });
+    }
+
+    return buttons;
+  };
+
+  const profileButtons = getProfileButtons();
+
+  const getHostingButtons = () => {
+    const baseButtons = [
+      {
+        label: t("account.myListings"),
+        subtitle: t("account.myListingsSubtitle"),
+        onPress: () => {
+          if (!isHostMode) {
+            switchToHostMode();
+          }
+          navigation.navigate("MyProperties");
+        },
+        icon: House,
+        requiresHost: true,
+      },
+      {
+        label: t("account.addListing"),
+        subtitle: t("account.addListingSubtitle"),
+        onPress: () => {
+          if (!isHostMode) {
+            switchToHostMode();
+          }
+          navigation.navigate("AddProperty");
+        },
+        icon: PlusCircle,
+        requiresHost: true,
+      },
+      {
+        label: t("account.dashboard"),
+        subtitle: t("account.dashboardSubtitle"),
+        onPress: () => {
+          if (!isHostMode) {
+            switchToHostMode();
+          }
+          (navigation as any).navigate("HostDashboard");
+        },
+        icon: ChartBar,
+        requiresHost: true,
+      },
+    ];
+
+    return baseButtons;
+  };
+
+  const hostingButtons = getHostingButtons();
+
+  const accountButtons = [
+    {
+      label: t("account.accountSettings"),
+      subtitle: t("account.accountSettingsSubtitle"),
+      onPress: () => navigation.navigate("Settings"),
+      icon: Gear,
+    },
+    // {
+    //   label: t("trips.myTrips", "My Trips"),
+    //   subtitle: t("trips.manageReservations", "Manage your reservations"),
+    //   onPress: () =>
+    //     (navigation as any).navigate("AccountRoot", { screen: "UserTrips" }),
+    //   icon: Clock,
+    // },
+    {
+      label: t("account.favorites"),
+      subtitle: t("account.favoritesSubtitle"),
+      onPress: () => navigation.navigate("Saved"),
+      icon: Heart,
+    },
+    {
+      label: t("account.likedVideos"),
+      subtitle: t("account.likedVideosSubtitle"),
+      onPress: () => navigation.navigate("LikedVideos" as never),
+      icon: Heart,
+    },
+    {
+      label: t("account.savedVideos"),
+      subtitle: t("account.savedVideosSubtitle"),
+      onPress: () => navigation.navigate("SavedVideos" as never),
+      icon: Bookmark,
+    },
+    {
+      label: t("account.sendFeedback"),
+      subtitle: t("account.sendFeedbackSubtitle"),
+      onPress: () => (navigation as any).navigate("Feedback"),
+      icon: FileText,
+    },
+  ];
+
+  const supportButtons = [
+    // {
+    //   label: t('account.helpCenter'),
+    //   subtitle: t('account.helpCenterSubtitle'),
+    //   onPress: () => navigation.navigate("HelpCenter"),
+    //   icon: Question,
+    // },
+    {
+      label: t("account.terms"),
+      subtitle: t("account.termsSubtitle"),
+      onPress: () => navigation.navigate("TermsOfService"),
+      icon: FileText,
+    },
+    {
+      label: t("account.privacy"),
+      subtitle: t("account.privacySubtitle"),
+      onPress: () => navigation.navigate("PrivacyPolicy"),
+      icon: LockIcon,
+    },
+    // {
+    //   label: t('account.aboutUs'),
+    //   subtitle: t('account.aboutUsSubtitle'),
+    //   onPress: () => navigation.navigate("AboutUs"),
+    //   icon: LockIcon,
+    // },
+  ];
+
+  const getStatusIcon = () => {
+    if (currentProfileStatus.status === "verified") return CheckCircle;
+    if (currentProfileStatus.verificationStatus === "pending") return Clock;
+    if (currentProfileStatus.verificationStatus === "rejected") return XCircle;
+    if (currentProfileStatus.status === "complete") return CheckCircle;
+    return Info;
+  };
+
+  const StatusIcon = getStatusIcon();
+
+  return (
+    <>
+      <View style={styles.container}>
+        <View
+          style={{
+            marginTop: "15%",
+            flex: 1,
+          }}
+        >
+          {/* STICKED HEADER FOR THE PROFILE */}
+          <View style={styles.stickyHeader}>
+            <Text style={styles.stickyHeaderTitle}>{t("account.profile")}</Text>
+          </View>
+
+          <ScrollView
+            style={styles.scrollView}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
+            {user ? (
+              <>
+                {/* Profile Header */}
+                <View style={styles.profileHeader}>
+                  <View style={styles.avatarContainer}>
+                    {userProfile?.profile?.avatarURL ||
+                    fullUserData?.avatarURL ||
+                    profile.avatarURL ? (
+                      <Image
+                        source={{
+                          uri:
+                            userProfile?.profile?.avatarURL ||
+                            fullUserData?.avatarURL ||
+                            profile.avatarURL,
+                        }}
+                        style={styles.avatar}
+                      />
+                    ) : (
+                      <View style={styles.avatarPlaceholder}>
+                        <User size={24} color="#717171" />
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.profileInfo}>
+                    <View style={styles.userNameRow}>
+                      <Text style={styles.userName}>
+                        {userProfile?.profile?.firstName
+                          ? `${userProfile.profile.firstName} ${userProfile.profile.lastName}`
+                          : fullUserData?.firstName
+                            ? `${fullUserData.firstName} ${fullUserData.lastName}`
+                            : user.firstName
+                              ? `${user.firstName} ${user.lastName}`
+                              : t("account.user")}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.storiesButton}
+                        onPress={() => {
+                          if (hasUserStories) {
+                            // If user has stories, navigate to MyStories screen
+                            navigation.navigate("MyStories" as never);
+                          } else {
+                            // If no stories, open AddStoryModal
+                            setStoryModalVisible(true);
+                          }
+                        }}
+                      >
+                        {hasUserStories ? (
+                          <Eye
+                            size={20}
+                            color={theme["color-primary-500"]}
+                            weight="fill"
+                          />
+                        ) : (
+                          <Plus size={20} color={"#717171"} weight="bold" />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                    <Text style={styles.userEmail}>
+                      {user.phoneNumber || fullUserData?.phoneNumber
+                        ? `+222 ${user.phoneNumber || fullUserData?.phoneNumber}`
+                        : user.email || fullUserData?.email}
+                    </Text>
+
+                    <View style={styles.statusContainer}>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          { backgroundColor: currentProfileStatus.color },
+                        ]}
+                      >
+                        <StatusIcon size={12} color="#FFFFFF" />
+                        <Text style={styles.statusText}>
+                          {t(`account.status.${currentProfileStatus.status}`, {
+                            defaultValue: currentProfileStatus.text,
+                          })}
+                        </Text>
+                      </View>
+                    </View>
+                    {brokerVerification?.is_verified ? (
+                      <AccountVerificationCard
+                        brokerId={brokerVerification.broker_id}
+                        onPress={openVerifiedBrokerSheet}
+                      />
+                    ) : null}
+                  </View>
+                </View>
+
+                {/* Host/User Mode Toggle */}
+                <HostModeToggle
+                  isHostMode={isHostMode}
+                  onToggle={(isHost) => {
+                    if (isHost) {
+                      switchToHostMode();
+                    } else {
+                      switchToUserMode();
+                    }
+                  }}
+                  disabled={isModeLoading || isTransitioning}
+                />
+
+                <View style={styles.becomeHostWrap}>
+                  <BecomeHostCard onPress={openHostOnboarding} />
+                </View>
+
+                {/* Profile Actions */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    {t("account.profileAndVerification")}
+                  </Text>
+                  {profileButtons.map((button, index) => {
+                    const IconComponent = button.icon;
+                    return (
+                      <TouchableOpacity
+                        key={index}
+                        style={[
+                          styles.menuItem,
+                          button.urgent && styles.urgentItem,
+                          button.disabled && styles.disabledItem,
+                        ]}
+                        onPress={button.disabled ? undefined : button.onPress}
+                        disabled={button.disabled}
+                      >
+                        <View style={styles.menuItemLeft}>
+                          <View
+                            style={[
+                              styles.iconContainer,
+                              button.urgent && styles.urgentIcon,
+                              button.disabled && styles.disabledIcon,
+                            ]}
+                          >
+                            <IconComponent
+                              size={18}
+                              color={
+                                button.disabled
+                                  ? "#CCCCCC"
+                                  : button.urgent
+                                    ? "#FF5A5F"
+                                    : "#222222"
+                              }
+                            />
+                          </View>
+                          <View style={styles.menuItemText}>
+                            <Text
+                              style={[
+                                styles.menuItemTitle,
+                                button.urgent && styles.urgentText,
+                                button.disabled && styles.disabledText,
+                              ]}
+                            >
+                              {button.label}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.menuItemSubtitle,
+                                button.disabled && styles.disabledSubtitle,
+                              ]}
+                            >
+                              {button.subtitle}
+                            </Text>
+                          </View>
+                        </View>
+                        {!button.disabled && (
+                          <CaretRight size={18} color="#717171" />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Hosting Actions */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    {t("account.discover")}
+                  </Text>
+                  {/* Add Story entry (host and regular users can post) */}
+                  <TouchableOpacity
+                    style={styles.menuItem}
+                    onPress={() => setStoryModalVisible(true)}
+                  >
+                    <View style={styles.menuItemLeft}>
+                      <View style={styles.iconContainer}>
+                        <Camera size={18} color="#222222" />
+                      </View>
+                      <View style={styles.menuItemText}>
+                        <Text style={styles.menuItemTitle}>
+                          {t("stories.addStory")}
+                        </Text>
+                        <Text style={styles.menuItemSubtitle}>
+                          {t("stories.addStorySubtitle")}
+                        </Text>
+                      </View>
+                    </View>
+                    <CaretRight size={18} color="#717171" />
+                  </TouchableOpacity>
+                  {hostingButtons.map((button, index) => {
+                    const IconComponent = button.icon;
+                    return (
+                      <TouchableOpacity
+                        key={index}
+                        style={styles.menuItem}
+                        onPress={button.onPress}
+                      >
+                        <View style={styles.menuItemLeft}>
+                          <View style={styles.iconContainer}>
+                            <IconComponent size={18} color="#222222" />
+                          </View>
+                          <View style={styles.menuItemText}>
+                            <Text style={styles.menuItemTitle}>
+                              {button.label}
+                            </Text>
+                            <Text style={styles.menuItemSubtitle}>
+                              {button.subtitle}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.menuItemRight}>
+                          {!isHostMode && button.requiresHost && (
+                            <View
+                              style={styles.hostBadge}
+                              accessibilityLabel={t(
+                                "account.hostAccess.menuBadgeHint",
+                              )}
+                            >
+                              <House size={12} color="#FF5A5F" weight="fill" />
+                            </View>
+                          )}
+                          <CaretRight size={18} color="#717171" />
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Account Actions */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    {t("account.account")}
+                  </Text>
+                  {accountButtons.map((button, index) => {
+                    const IconComponent = button.icon;
+                    return (
+                      <TouchableOpacity
+                        key={index}
+                        style={styles.menuItem}
+                        onPress={button.onPress}
+                      >
+                        <View style={styles.menuItemLeft}>
+                          <View style={styles.iconContainer}>
+                            <IconComponent size={18} color="#222222" />
+                          </View>
+                          <View style={styles.menuItemText}>
+                            <Text style={styles.menuItemTitle}>
+                              {button.label}
+                            </Text>
+                            <Text style={styles.menuItemSubtitle}>
+                              {button.subtitle}
+                            </Text>
+                          </View>
+                        </View>
+                        <CaretRight size={18} color="#717171" />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Support Actions */}
+                <View style={styles.section}>
+                  <Text style={styles.sectionTitle}>
+                    {t("account.support")}
+                  </Text>
+                  {supportButtons.map((button, index) => {
+                    const IconComponent = button.icon;
+                    return (
+                      <TouchableOpacity
+                        key={index}
+                        style={styles.menuItem}
+                        onPress={button.onPress}
+                      >
+                        <View style={styles.menuItemLeft}>
+                          <View style={styles.iconContainer}>
+                            <IconComponent size={18} color="#222222" />
+                          </View>
+                          <View style={styles.menuItemText}>
+                            <Text style={styles.menuItemTitle}>
+                              {button.label}
+                            </Text>
+                            <Text style={styles.menuItemSubtitle}>
+                              {button.subtitle}
+                            </Text>
+                          </View>
+                        </View>
+                        <CaretRight size={18} color="#717171" />
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Sign Out */}
+                <View style={styles.signOutSection}>
+                  <TouchableOpacity
+                    style={styles.signOutButton}
+                    onPress={logout}
+                  >
+                    <SignOut size={18} color="#FF5A5F" />
+                    <Text style={styles.signOutText}>
+                      {t("account.signOut")}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* CREATE HERE A CONTACT US ADN USE TEH STLING OF STYLES ADN NOT STYLESHEET */}
+                {/* <View style={styles.contactUsSection}>
+              <Text style={styles.contactUsTitle}>{t('account.contactUs')}</Text>
+              <Text style={styles.contactUsDescription}>
+                {t('account.contactUsDescription')}
+              </Text>
+            </View> */}
+                {/* <View style={styles.contactUsInfo}>
+              <Text style={styles.contactUsLabel}>{t('account.contactEmail')}</Text>
+              <Text style={styles.contactUsValue}>habitat@outlook.fr</Text>
+            </View>
+            <View style={styles.contactUsInfo}>
+              <Text style={styles.contactUsLabel}>{t('account.contactPhone')}</Text>
+              <Text style={styles.contactUsValue}>+33 779 151 746</Text>
+            </View>
+            <View style={styles.contactUsInfo}>
+              <Text style={styles.contactUsLabel}>{t('account.contactAddress')}</Text>
+              <Text style={styles.contactUsValue}>{t('account.contactAddressValue')}</Text>
+            </View> */}
+              </>
+            ) : (
+              <>
+                {/* Guest View */}
+                <View style={styles.guestHeader}>
+                  {/* <Text style={styles.guestTitle}>{t('account.guestTitle')}</Text> */}
+                  <Image
+                    source={require("../assets/Profile2.jpg")}
+                    style={{
+                      width: 120,
+                      height: 120,
+                      borderRadius: 50,
+                      marginBottom: 20,
+                    }}
+                  />
+                  <Text style={styles.guestSubtitle}>
+                    {t("account.guestSubtitle")}
+                  </Text>
+
+                  <SignUpAndSignInButtons />
+                </View>
+
+                <View style={styles.guestSection}>
+                  <Text style={styles.sectionTitle}>
+                    {t("account.ownerPrompt")}
+                  </Text>
+                  <Text style={styles.guestDescription}>
+                    {t("account.ownerSubtitle")}
+                  </Text>
+                  <View style={styles.becomeHostWrapGuest}>
+                    <BecomeHostCard onPress={openHostOnboarding} />
+                  </View>
+                </View>
+              </>
+            )}
+          </ScrollView>
+
+          {/* Language selector removed - app auto-detects language from device */}
+        </View>
+      </View>
+
+      <HostOnboardingSheet
+        sheetRef={hostOnboardingSheetRef}
+        modalName="hostOnboardingAccount"
+      />
+
+      {brokerVerification?.is_verified ? (
+        <VerifiedBrokerSheet
+          sheetRef={verifiedBrokerSheetRef}
+          status={brokerVerification}
+          onClose={closeVerifiedBrokerSheet}
+          onOpenSettings={() => {
+            closeVerifiedBrokerSheet();
+            (navigation as any).navigate("AccountSettings");
+          }}
+        />
+      ) : null}
+
+      {/* Add Story Modal */}
+      <AddStoryModal
+        visible={storyModalVisible}
+        onClose={() => setStoryModalVisible(false)}
+        onUploaded={() => {
+          if (!user?.ID) return;
+          (async () => {
+            try {
+              const res = await axios.get(
+                `${endpoints.baseURL}/stories/${user.ID}`,
+              );
+              const stories = res.data?.stories || [];
+              setHasUserStories(stories.length > 0);
+            } catch {}
+          })();
+        }}
+      />
+    </>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#FFFFFF",
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingBottom: 30,
+  },
+
+  // Profile Header
+  profileHeader: {
+    flexDirection: "row",
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    backgroundColor: "#FFFFFF",
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5E5",
+  },
+  avatarContainer: {
+    position: "relative",
+    marginRight: 16,
+  },
+  avatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+  avatarPlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: "#F7F7F7",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  editAvatarButton: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "#222222",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  profileInfo: {
+    flex: 1,
+    justifyContent: "center",
+  },
+  userNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 3,
+  },
+  storiesButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+  },
+  userName: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#222222",
+    flex: 1,
+    letterSpacing: -0.3,
+  },
+  userEmail: {
+    fontSize: 13,
+    color: "#717171",
+    marginBottom: 8,
+    fontWeight: "500",
+  },
+  statusContainer: {
+    flexDirection: "row",
+  },
+  statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 16,
+  },
+  statusText: {
+    fontSize: 11,
+    color: "#FFFFFF",
+    fontWeight: "600",
+    marginLeft: 4,
+  },
+
+  // Sections
+  becomeHostWrap: {
+    paddingHorizontal: 18,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  becomeHostWrapGuest: {
+    marginTop: 8,
+    width: "100%",
+  },
+  section: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5E5",
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#222222",
+    marginBottom: 14,
+    letterSpacing: -0.3,
+  },
+
+  // Menu Items
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    paddingHorizontal: 0,
+  },
+  urgentItem: {
+    backgroundColor: "#FFF5F5",
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginHorizontal: -12,
+  },
+  menuItemLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  menuItemRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  iconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F7F7F7",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  urgentIcon: {
+    backgroundColor: "#FFE5E5",
+  },
+  disabledItem: {
+    opacity: 0.6,
+  },
+  disabledIcon: {
+    backgroundColor: "#F0F0F0",
+  },
+  menuItemText: {
+    flex: 1,
+  },
+  menuItemTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#222222",
+    marginBottom: 1,
+    letterSpacing: -0.2,
+  },
+  urgentText: {
+    color: "#FF5A5F",
+  },
+  disabledText: {
+    color: "#CCCCCC",
+  },
+  menuItemSubtitle: {
+    fontSize: 11,
+    color: "#717171",
+    fontWeight: "400",
+    lineHeight: 16,
+  },
+  disabledSubtitle: {
+    color: "#CCCCCC",
+  },
+  hostBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#FFE5E5",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  // Sign Out
+  signOutSection: {
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+  },
+  signOutButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    backgroundColor: "#FFF5F5",
+    borderWidth: 1,
+    borderColor: "#FFE5E5",
+  },
+  signOutText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#FF5A5F",
+    marginLeft: 6,
+  },
+
+  // Guest View
+  guestHeader: {
+    paddingHorizontal: 18,
+    paddingVertical: 30,
+    alignItems: "center",
+  },
+  guestTitle: {
+    fontSize: 22,
+    fontWeight: "700",
+    color: "#222222",
+    textAlign: "center",
+    marginBottom: 8,
+    letterSpacing: -0.5,
+  },
+  guestSubtitle: {
+    fontSize: 13,
+    color: "#717171",
+    textAlign: "center",
+    lineHeight: 18,
+    marginBottom: 24,
+    fontWeight: "400",
+  },
+  guestSection: {
+    paddingHorizontal: 18,
+    paddingVertical: 24,
+    backgroundColor: "#F7F7F7",
+    marginHorizontal: 18,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  guestDescription: {
+    fontSize: 13,
+    color: "#717171",
+    textAlign: "center",
+    lineHeight: 18,
+    marginBottom: 18,
+    fontWeight: "400",
+  },
+  hostButton: {
+    backgroundColor: "#222222",
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  hostButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#FFFFFF",
+    letterSpacing: -0.2,
+  },
+  stickyHeader: {
+    paddingHorizontal: 10,
+    paddingTop: 8,
+  },
+  stickyHeaderTitle: {
+    fontSize: 28,
+    fontWeight: "700",
+    color: "#222222",
+  },
+  headerGradient: {
+    paddingBottom: 16,
+    backgroundColor: "rgba(0,0,0,0.6)",
+  },
+  headerContent: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+  },
+  headerButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  fbOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  fbSheet: {
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+  },
+  fbTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#111827",
+    marginBottom: 8,
+  },
+  fbInput: {
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: "#111827",
+    marginBottom: 10,
+  },
+  fbTextarea: { height: 120, textAlignVertical: "top" },
+  fbCancelBtn: { paddingVertical: 10, paddingHorizontal: 12 },
+  fbCancelText: { color: "#111827", fontWeight: "600" },
+  fbSendBtn: {
+    backgroundColor: "#222222",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+  },
+  fbSendText: { color: "#FFFFFF", fontWeight: "700" },
+  languageButton: {
+    backgroundColor: "#F7F7F7",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginVertical: 12,
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
+  },
+  languageButtonText: {
+    color: "#222222",
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: "bold",
+    marginBottom: 40,
+  },
+  createButton: {
+    backgroundColor: "#FF5A5F",
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 25,
+  },
+  createButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  subtitle: {
+    fontSize: 16,
+    color: "#666",
+    marginBottom: 40,
+  },
+  button: {
+    backgroundColor: "#007AFF",
+    paddingHorizontal: 40,
+    paddingVertical: 18,
+    borderRadius: 14,
+    shadowColor: "#007AFF",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  buttonText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  formGroup: {
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 1.5,
+    borderColor: "#e0e0e0",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: "#1a1a1a",
+    backgroundColor: "#fafafa",
+  },
+  textArea: {
+    height: 100,
+    paddingTop: 14,
+  },
+  submitButton: {
+    backgroundColor: "#007AFF",
+    borderRadius: 12,
+    paddingVertical: 16,
+    alignItems: "center",
+    marginTop: 12,
+    marginBottom: 20,
+  },
+  submitButtonText: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  contactUsSection: {
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+  },
+  contactUsTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#222222",
+  },
+  contactUsDescription: {
+    fontSize: 14,
+    color: "#717171",
+    fontWeight: "400",
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  contactUsInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+    marginHorizontal: 18,
+  },
+  contactUsLabel: {
+    fontSize: 14,
+    color: "#717171",
+    fontWeight: "400",
+    lineHeight: 20,
+  },
+  contactUsValue: {
+    fontSize: 14,
+    color: "#222222",
+    fontWeight: "600",
+    lineHeight: 20,
+  },
+});
