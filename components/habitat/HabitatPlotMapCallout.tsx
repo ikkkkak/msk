@@ -124,13 +124,6 @@ function buildCalloutRows(
   ];
 }
 
-const CalloutPointer = memo(function CalloutPointer() {
-  return (
-    <View style={styles.pointerWrap} pointerEvents="none">
-      <View style={styles.pointerDiamond} />
-    </View>
-  );
-});
 
 export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
   plot,
@@ -299,7 +292,12 @@ export const HabitatPlotPinMarker = memo(function HabitatPlotPinMarker({
       tappable={!!onPress}
       onPress={onPress}
     >
-      <Animated.View style={[styles.pinDot, pinStyle]} pointerEvents="none" />
+      <Animated.View style={[styles.pinPuck, pinStyle]} pointerEvents="none">
+        <View style={styles.pinHalo} />
+        <View style={styles.pinRing}>
+          <View style={styles.pinCore} />
+        </View>
+      </Animated.View>
     </Marker>
   );
 });
@@ -504,7 +502,6 @@ export const HabitatPlotCalloutOverlay = memo(
           </CalloutCardMeasure>
         </Animated.View>
         <View style={styles.liftGap} pointerEvents="none" />
-        <CalloutPointer />
       </Animated.View>
     );
   },
@@ -694,44 +691,40 @@ const styles = StyleSheet.create({
     transform: [{ scaleX: -1 }],
   },
   liftGap: { width: CARD_WIDTH, height: CALLOUT_LIFT_GAP },
-  pointerWrap: {
+  /** Modern selected-plot puck: soft accent halo → white ring → accent core. */
+  pinPuck: {
+    width: 30,
+    height: 30,
     alignItems: "center",
     justifyContent: "center",
-    width: CARD_WIDTH,
-    height: POINTER_HEIGHT,
   },
-  pointerDiamond: {
-    width: 16,
-    height: 16,
-    borderRadius: 3,
+  pinHalo: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 15,
+    backgroundColor: ACCENT,
+    opacity: 0.18,
+  },
+  pinRing: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
     backgroundColor: "#FFFFFF",
-    transform: [{ rotate: "45deg" }],
-    marginTop: -POINTER_HEIGHT / 2,
+    alignItems: "center",
+    justifyContent: "center",
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 2, height: 2 },
-        shadowOpacity: 0.1,
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.18,
         shadowRadius: 3,
       },
       android: { elevation: 3 },
     }),
   },
-  pinDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+  pinCore: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: ACCENT,
-    borderWidth: 3,
-    borderColor: "#FFFFFF",
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
-      },
-      android: { elevation: 4 },
-    }),
   },
 });
