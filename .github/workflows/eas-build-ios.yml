@@ -24,5 +24,8 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
+      - name: Install dependencies
+        run: npm install
+
       - name: Build iOS
         run: eas build --platform ios --profile development --non-interactive
