@@ -421,8 +421,10 @@ function HabitatMapLayersInner({
   const zoneSelected = selectedPlanId != null;
   const mapSettled = !mapNavigating;
 
-  const showCityPlans =
-    !zoneSelected && !quartierPinned && z <= PLAN_LAYER_MAX_ZOOM;
+  // District (plan) polygons at city zoom — Tevragh Zeina / Teyarett / Ksar
+  // etc. as colored shapes with name labels — are intentionally never shown:
+  // the map stays clean until the user picks a zone via filter or search.
+  const showCityPlans = false;
   const showZoneContext =
     zoneSelected && !quartierPinned && z <= PLAN_LAYER_MAX_ZOOM + 2;
   const showPlots =
