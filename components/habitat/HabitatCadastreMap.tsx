@@ -171,6 +171,8 @@ export function HabitatCadastreMap({
   const [showPlotLoading, setShowPlotLoading] = useState(false);
   const plotCalloutSyncRef = useRef<(() => void) | null>(null);
   const plotCalloutIdleSyncRef = useRef<(() => void) | null>(null);
+  /** Animated plot-card dismiss (exit motion before unmount) — set by the overlay. */
+  const plotCalloutDismissRef = useRef<(() => void) | null>(null);
   const landCalloutSyncRef = useRef<(() => void) | null>(null);
   const landCalloutIdleSyncRef = useRef<(() => void) | null>(null);
   const navPulse = useRef(new Animated.Value(0)).current;
@@ -229,7 +231,12 @@ export function HabitatCadastreMap({
 
   const handleMapPress = useCallback(() => {
     if (plotOpen) {
-      handlePlotClose();
+      // Prefer the overlay's animated dismiss — instant unmount is jarring.
+      if (plotCalloutDismissRef.current) {
+        plotCalloutDismissRef.current();
+      } else {
+        handlePlotClose();
+      }
       return;
     }
     if (landOpen) {
@@ -609,6 +616,7 @@ export function HabitatCadastreMap({
           coordinate={plotCoordinate}
           regionSyncRef={plotCalloutSyncRef}
           regionIdleSyncRef={plotCalloutIdleSyncRef}
+          dismissRef={plotCalloutDismissRef}
           onClose={handlePlotClose}
           onViewAllDetails={onPlotViewAllDetails}
         />

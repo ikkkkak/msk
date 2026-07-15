@@ -18,6 +18,7 @@ import Animated, {
   useSharedValue,
   withTiming,
   Easing,
+  runOnJS,
 } from "react-native-reanimated";
 import { MaterialIcons } from "@expo/vector-icons";
 import { CaretRight } from "phosphor-react-native";
@@ -32,9 +33,10 @@ import { theme } from "../../theme";
 export const CARD_WIDTH = 288;
 const CALLOUT_LIFT_GAP = 100;
 const POINTER_HEIGHT = 22;
-const PLOT_CARD_FADE_MS = 120;
+const PLOT_CARD_ENTER_MS = 200;
+const PLOT_CARD_EXIT_MS = 130;
 const PLOT_SWITCH_MS = 200;
-const PLOT_PAN_SYNC_MS = 32;
+const PLOT_PAN_SYNC_MS = 24;
 /** Design tokens for this card — warm accent + Airbnb-style neutral ink/gray scale. */
 const ACCENT = theme["color-temporary-primary"];
 const INK = "#222222";
@@ -315,6 +317,8 @@ type OverlayProps = {
   coordinate: LatLng;
   regionSyncRef: PlotCalloutRegionSyncRef;
   regionIdleSyncRef?: PlotCalloutRegionSyncRef;
+  /** Parent stores an animated-dismiss trigger here — map taps close with the exit animation instead of an instant unmount. */
+  dismissRef?: React.MutableRefObject<(() => void) | null>;
   onClose: () => void;
   onViewAllDetails?: (plot: HabitatPlot) => void;
 };
@@ -327,6 +331,7 @@ export const HabitatPlotCalloutOverlay = memo(
     coordinate,
     regionSyncRef,
     regionIdleSyncRef,
+    dismissRef,
     onClose,
     onViewAllDetails,
   }: OverlayProps) {
@@ -335,6 +340,9 @@ export const HabitatPlotCalloutOverlay = memo(
     const overlayOpacity = useSharedValue(0);
     const cardContentOpacity = useSharedValue(1);
     const cardScale = useSharedValue(1);
+    /** Entrance rise — the card settles upward into place instead of popping. */
+    const cardRise = useSharedValue(10);
+    const closingRef = useRef(false);
 
     const cardHeightRef = useRef(320);
     const readyRef = useRef(false);
@@ -353,11 +361,55 @@ export const HabitatPlotCalloutOverlay = memo(
         translateY.value = y - stackHeight;
         if (!readyRef.current) {
           readyRef.current = true;
-          overlayOpacity.value = withTiming(1, { duration: PLOT_CARD_FADE_MS });
+          // Entrance: fade + settle-up + micro-scale, one GPU-driven motion.
+          cardScale.value = 0.97;
+          cardRise.value = 10;
+          overlayOpacity.value = withTiming(1, {
+            duration: PLOT_CARD_ENTER_MS,
+            easing: Easing.out(Easing.cubic),
+          });
+          cardScale.value = withTiming(1, {
+            duration: PLOT_CARD_ENTER_MS,
+            easing: Easing.out(Easing.cubic),
+          });
+          cardRise.value = withTiming(0, {
+            duration: PLOT_CARD_ENTER_MS,
+            easing: Easing.out(Easing.cubic),
+          });
         }
       },
-      [overlayOpacity, translateX, translateY],
+      [overlayOpacity, translateX, translateY, cardScale, cardRise],
     );
+
+    /** Animated close — plays the exit motion, then unmounts via onClose. */
+    const requestDismiss = useCallback(() => {
+      if (closingRef.current) return;
+      closingRef.current = true;
+      cardScale.value = withTiming(0.97, {
+        duration: PLOT_CARD_EXIT_MS,
+        easing: Easing.in(Easing.cubic),
+      });
+      overlayOpacity.value = withTiming(
+        0,
+        { duration: PLOT_CARD_EXIT_MS, easing: Easing.in(Easing.cubic) },
+        (finished) => {
+          if (finished) runOnJS(onClose)();
+        },
+      );
+    }, [cardScale, overlayOpacity, onClose]);
+
+    useEffect(() => {
+      if (!dismissRef) return;
+      dismissRef.current = requestDismiss;
+      return () => {
+        dismissRef.current = null;
+      };
+    }, [dismissRef, requestDismiss]);
+
+    // Switching to another plot while open: cancel any in-flight close.
+    useEffect(() => {
+      closingRef.current = false;
+    }, [plot.id]);
 
     const syncScreenPoint = useCallback(async () => {
       if (!mountedRef.current) return;
@@ -473,7 +525,10 @@ export const HabitatPlotCalloutOverlay = memo(
 
     const cardAnimatedStyle = useAnimatedStyle(() => ({
       opacity: cardContentOpacity.value,
-      transform: [{ scale: cardScale.value }],
+      transform: [
+        { translateY: cardRise.value },
+        { scale: cardScale.value },
+      ],
     }));
 
     const handleCardLayout = useCallback(
@@ -490,13 +545,14 @@ export const HabitatPlotCalloutOverlay = memo(
       <Animated.View
         pointerEvents="box-none"
         collapsable={false}
+        renderToHardwareTextureAndroid
         style={[styles.overlayHost, animatedStyle]}
       >
         <Animated.View style={cardAnimatedStyle}>
           <CalloutCardMeasure onHeight={handleCardLayout}>
             <HabitatPlotCalloutCard
               plot={plot}
-              onClose={onClose}
+              onClose={requestDismiss}
               onViewAllDetails={onViewAllDetails}
             />
           </CalloutCardMeasure>
