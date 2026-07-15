@@ -73,56 +73,8 @@ const PLOT_LABEL_MIN_ZOOM = 16;
 
 const MAPLIBRE_DEMO_STYLE = "https://demotiles.maplibre.org/style.json";
 
-/**
- * Apple Maps imagery via Leaflet CDN (vector tile base).
- * Used as fallback when glyph loading fails (common in dev/offline scenarios).
- */
-const MAPLIBRE_APPLE_MAPS_STYLE: StyleSpecification = {
-  version: 8,
-  name: "Apple Maps",
-  sources: {
-    "apple-maps": {
-      type: "raster",
-      tiles: [
-        "https://tiles{1,2,3}.geo.apple.com/tiles/v1/satc?z={z}&x={x}&y={y}&accessToken=",
-      ],
-      tileSize: 256,
-      attribution: "Apple Maps",
-    },
-  },
-  layers: [
-    {
-      id: "apple-maps-layer",
-      type: "raster",
-      source: "apple-maps",
-    },
-  ],
-};
-
-const MAPLIBRE_GOOGLE_MAPS_STYLE: StyleSpecification = {
-  version: 8,
-  name: "Google Maps",
-  sources: {
-    "google-maps": {
-      type: "raster",
-      tiles: [
-        "https://mt0.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}",
-      ],
-      tileSize: 256,
-      attribution: "Google Maps",
-    },
-  },
-  layers: [
-    {
-      id: "google-maps-layer",
-      type: "raster",
-      source: "google-maps",
-    },
-  ],
-};
-
 type DistrictFallback = { name: string; coordinates: LatLng[] };
-type MapType = "standard" | "satellite" | "sentinel" | "apple" | "google";
+type MapType = "standard" | "satellite" | "sentinel";
 
 /**
  * Esri World Imagery — actively re-flown/updated aerial+satellite mosaic,
@@ -183,10 +135,8 @@ const SENTINEL2_2025_STYLE: StyleSpecification = {
 };
 
 function resolveMapLibreStyle(_mapType: MapType): string | StyleSpecification {
-  // Platform-specific defaults: Apple Maps for iOS, Google Maps for Android
-  return Platform.OS === "ios"
-    ? MAPLIBRE_APPLE_MAPS_STYLE
-    : MAPLIBRE_GOOGLE_MAPS_STYLE;
+  // Both iOS and Android use Esri (free, high quality, no auth required)
+  return ESRI_WORLD_IMAGERY_STYLE;
 }
 
 export type HabitatMapLibreCadastreProps = {
