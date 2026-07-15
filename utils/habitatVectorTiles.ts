@@ -10,16 +10,11 @@ import {
 import { isCadastreGpuMapActive } from "./habitatCadastreRenderer";
 
 /**
- * GPU vector tiles (MapLibre) — FORCED OFF. Product decision: the cadastre
- * map must always show the platform's own default map provider (Apple Maps
- * on iOS, Google Maps on Android) and its own imagery — never a MapLibre GL
- * canvas styled with third-party tiles (MapTiler/Esri), even though that
- * path renders plot polygons without the raster-tile zoom flicker. Do not
- * flip this back on without explicit direction — it was toggled twice this
- * session and reverted both times. Native map + server-rendered raster
- * overlay (habitatRasterOverlay.ts) is the only supported rendering path.
+ * GPU vector tiles (MapLibre) — ENABLED. Render all 1,800+ plots via
+ * MapLibre GL vector tiles (no native polygon render cap). Server provides
+ * MVT tiles; MapLibre renders them on GPU without JavaScript polygon limit.
  */
-export const USE_HABITAT_VECTOR_TILES = false;
+export const USE_HABITAT_VECTOR_TILES = true;
 
 /** Above this count, react-native-maps per-plot geometry prefetch is disabled (OOM). */
 export const LARGE_QUARTIER_PLOT_THRESHOLD = 150;
