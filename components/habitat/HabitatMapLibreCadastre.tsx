@@ -99,8 +99,30 @@ const MAPLIBRE_APPLE_MAPS_STYLE: StyleSpecification = {
   ],
 };
 
+const MAPLIBRE_GOOGLE_MAPS_STYLE: StyleSpecification = {
+  version: 8,
+  name: "Google Maps",
+  sources: {
+    "google-maps": {
+      type: "raster",
+      tiles: [
+        "https://mt0.google.com/vt/lyrs=m&hl=en&x={x}&y={y}&z={z}",
+      ],
+      tileSize: 256,
+      attribution: "Google Maps",
+    },
+  },
+  layers: [
+    {
+      id: "google-maps-layer",
+      type: "raster",
+      source: "google-maps",
+    },
+  ],
+};
+
 type DistrictFallback = { name: string; coordinates: LatLng[] };
-type MapType = "standard" | "satellite" | "sentinel";
+type MapType = "standard" | "satellite" | "sentinel" | "apple" | "google";
 
 /**
  * Esri World Imagery — actively re-flown/updated aerial+satellite mosaic,
@@ -163,7 +185,9 @@ const SENTINEL2_2025_STYLE: StyleSpecification = {
 function resolveMapLibreStyle(mapType: MapType): string | StyleSpecification {
   if (mapType === "satellite") return ESRI_WORLD_IMAGERY_STYLE;
   if (mapType === "sentinel") return SENTINEL2_2025_STYLE;
-  // Use Apple Maps by default (glyph-free, native platform imagery)
+  if (mapType === "google") return MAPLIBRE_GOOGLE_MAPS_STYLE;
+  if (mapType === "apple") return MAPLIBRE_APPLE_MAPS_STYLE;
+  // Default to Apple Maps (glyph-free, native platform imagery)
   return MAPLIBRE_APPLE_MAPS_STYLE;
 }
 
