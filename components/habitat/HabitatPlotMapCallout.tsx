@@ -10,6 +10,7 @@ import {
   StyleSheet,
   Platform,
   I18nManager,
+  Image,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import Animated, {
@@ -176,6 +177,31 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
   return (
     <View style={styles.cardShadowWrap}>
       <View style={styles.card}>
+        <View style={styles.header}>
+          <Image
+            source={require("../../assets/logo-bg-white.png")}
+            style={styles.headerLogo}
+            resizeMode="contain"
+          />
+          {isForSale ? (
+            <View style={styles.forSalePill}>
+              <View style={styles.forSaleDot} />
+              <Text style={styles.forSalePillText}>
+                {t("habitatCadastre.card.forSale", "For sale")}
+              </Text>
+            </View>
+          ) : null}
+          <Pressable
+            onPress={dismiss}
+            hitSlop={12}
+            style={styles.closeBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.close", "Close")}
+          >
+            <MaterialIcons name="close" size={16} color={INK} />
+          </Pressable>
+        </View>
+
         <View style={styles.table}>
           {rows.map((row, idx) => (
             <View
@@ -183,17 +209,6 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
               style={[styles.tableRow, idx === rows.length - 1 && !subSectorName && styles.tableRowLast]}
             >
               <View style={styles.valueCell}>
-                {idx === 0 ? (
-                  <Pressable
-                    onPress={dismiss}
-                    hitSlop={12}
-                    style={styles.closeBtn}
-                    accessibilityRole="button"
-                    accessibilityLabel={t("common.close", "Close")}
-                  >
-                    <MaterialIcons name="close" size={15} color={INK} />
-                  </Pressable>
-                ) : null}
                 <Text style={styles.valueText} numberOfLines={2}>
                   {row.value}
                 </Text>
@@ -548,11 +563,47 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     overflow: "hidden",
   },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  headerLogo: {
+    width: 30,
+    height: 30,
+    borderRadius: 6,
+  },
+  forSalePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(220, 38, 38, 0.1)",
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  forSaleDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#DC2626",
+  },
+  forSalePillText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#DC2626",
+    letterSpacing: 0.2,
+  },
   closeBtn: {
-    width: 22,
-    height: 22,
+    marginLeft: "auto",
+    width: 26,
+    height: 26,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "#F5F6F8",
+    borderRadius: 13,
   },
   infoIcon: {
     marginLeft: "auto",
@@ -565,6 +616,8 @@ const styles = StyleSheet.create({
    */
   table: {
     alignSelf: "stretch",
+    borderTopWidth: 1,
+    borderTopColor: TABLE_BORDER,
   },
   tableRow: {
     flexDirection: "row",
