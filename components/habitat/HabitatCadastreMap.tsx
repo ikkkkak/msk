@@ -448,21 +448,11 @@ export function HabitatCadastreMap({
       }
       return t("habitatCadastre.gettingPlan", "We're getting your plan…");
     }
-    if (geometryPreparing) {
-      return t(
-        "habitatCadastre.levelPlotsViewportLoading",
-        "Loading visible plots…",
-      );
-    }
-    if (loadingPlots && selectedSectorId != null) {
-      const pending = sectorPlotTotal > 0 ? sectorPlotTotal : null;
-      return pending
-        ? t(
-            "habitatCadastre.levelPlotsMetadataLoading",
-            "Loading {{count}} plot records…",
-            { count: pending },
-          )
-        : t("habitatCadastre.levelPlotsLoadingGeneric", "Loading all plots…");
+    // One warm, consistent expression for the whole quartier fetch→draw
+    // window (metadata fetch, geometry batches, first paint prep) instead
+    // of cycling through technical phase messages.
+    if ((geometryPreparing || loadingPlots) && selectedSectorId != null) {
+      return t("habitatCadastre.gettingPlan", "We're getting your plan…");
     }
     return null;
   })();
