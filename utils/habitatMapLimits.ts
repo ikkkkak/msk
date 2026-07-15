@@ -35,6 +35,23 @@ export const MAX_PLOTS_VIEWPORT_SECTOR = 80;
 /** Below this zoom, draw fewer polygons (still from full local cache). */
 export const MIN_ZOOM_SECTOR_PLOT_GEOM = 12;
 
+/**
+ * Pinned-quartier level-of-detail. Every plot mounted at once is only safe
+ * while the camera is close enough that MapKit/GMaps rasterize a small
+ * subset per tile. Zoomed out, ALL polygons land in every visible tile and
+ * each pan frame re-tessellates the entire quartier — that sustained spike
+ * is what crashed the app on zoom-out + pan with 1,800 mounted.
+ *
+ *   zoom >= PLOT_FULL_DETAIL_ZOOM  → full static set (every plot)
+ *   MIN_ZOOM_SECTOR_PLOT_GEOM..14  → evenly sampled preview (cap below)
+ *   zoom < MIN_ZOOM_SECTOR_PLOT_GEOM → boundary only (plots are sub-pixel)
+ *
+ * Transitions are prefix-slices of ONE stable ordered array — polygons are
+ * added/removed incrementally, never rebuilt.
+ */
+export const PLOT_FULL_DETAIL_ZOOM = 14;
+export const MID_ZOOM_PLOT_SAMPLE = 900;
+
 /** Plot number labels — only render when very few plots visible. */
 export const MAX_PLOT_NUMBER_LABELS = 8;
 

@@ -59,11 +59,17 @@ import {
 } from "../utils/habitatViewportPlots";
 import { CadastrePerfTrace } from "../utils/habitatCadastrePerf";
 import { isPlotRenderingHandledExternally } from "../utils/habitatCadastreRenderer";
-import { MAX_NATIVE_MAP_CHILDREN_SECTOR } from "../utils/habitatMapLimits";
+import {
+  MAX_NATIVE_MAP_CHILDREN_SECTOR,
+  MID_ZOOM_PLOT_SAMPLE,
+  PLOT_FULL_DETAIL_ZOOM,
+  MIN_ZOOM_SECTOR_PLOT_GEOM,
+} from "../utils/habitatMapLimits";
 import {
   fetchSectorViewportGeometry,
   scheduleProgressiveReveal,
   MIN_SECTOR_VIEWPORT_ZOOM,
+  PLOT_SHAPE_CHUNK_SIZE,
 } from "../utils/habitatSectorViewportGeometry";
 
 import {
@@ -357,6 +363,8 @@ export function useHabitatCadastre() {
   const lastPlotFetchRegion = useRef<Region | null>(null);
   /** Sector id whose progressive reveal already ran once (legacy fallback only). */
   const revealedSectorRef = useRef<number | null>(null);
+  /** Last count actually applied to the map — staged reveals resume from here. */
+  const revealedCountRef = useRef(0);
   const lastPlotViewportHash = useRef("");
   const lastSectorViewportHash = useRef("");
 
@@ -1440,6 +1448,47 @@ export function useHabitatCadastre() {
     return capPlotShapesForSector(buildSectorPlotShapes(picked));
   }, [sectorDrawablePlots, sectorShapesStatic, selectedPlot, debouncedRegion]);
 
+  /**
+   * LOD ordering — ONE stable array whose prefix is always a representative
+   * sample of the whole quartier: stride-sampled plots first, the remainder
+   * after. Every zoom tier is then just a slice length of this array, so
+   * tier transitions add/remove polygons incrementally with zero identity
+   * churn (the same descriptor objects stay mounted across tiers).
+   */
+  const orderedPlotShapes = useMemo(() => {
+    const shapes = plotShapesFull;
+    if (shapes.length <= MID_ZOOM_PLOT_SAMPLE) return shapes;
+    const stride = Math.ceil(shapes.length / MID_ZOOM_PLOT_SAMPLE);
+    const sampled: typeof shapes = [];
+    const rest: typeof shapes = [];
+    for (let i = 0; i < shapes.length; i++) {
+      if (i % stride === 0 && sampled.length < MID_ZOOM_PLOT_SAMPLE) {
+        sampled.push(shapes[i]!);
+      } else {
+        rest.push(shapes[i]!);
+      }
+    }
+    return sampled.concat(rest);
+  }, [plotShapesFull]);
+
+  /**
+   * Zoom-gated mount budget. All 1,800+ mounted at once is only safe while
+   * zoomed in enough that the map rasterizes a small visible subset per
+   * frame; zoomed out, every polygon lands in every pan frame's redraw and
+   * the sustained tessellation spike kills the app (observed crash:
+   * zoom-out + pan with the full quartier mounted). Below full-detail zoom
+   * a sampled preview keeps the quartier visually dense; below plot zoom
+   * only the quartier boundary renders — plots are sub-pixel there anyway.
+   */
+  const plotLodCount = useMemo(() => {
+    const z = zoomFromRegion(debouncedRegion.longitudeDelta);
+    if (z < MIN_ZOOM_SECTOR_PLOT_GEOM) return 0;
+    if (z < PLOT_FULL_DETAIL_ZOOM) {
+      return Math.min(MID_ZOOM_PLOT_SAMPLE, orderedPlotShapes.length);
+    }
+    return orderedPlotShapes.length;
+  }, [debouncedRegion.longitudeDelta, orderedPlotShapes]);
+
   useEffect(() => {
     if (
       selectedSectorId == null ||
@@ -1448,37 +1497,52 @@ export function useHabitatCadastre() {
     ) {
       setRevealedPlotShapeCount(0);
       revealedSectorRef.current = null;
+      revealedCountRef.current = 0;
       return;
     }
 
-    // plotShapesFull depends on debouncedRegion, so it recomputes on every
-    // pan/zoom while a quartier is pinned. Re-running the staged/animated
-    // reveal from scratch on every one of those churns dozens of native
-    // Polygon views in and out at high frequency — a known iOS
-    // react-native-maps crash pattern (native-level, not catchable by JS).
-    // Stage the reveal only once per quartier selection; later viewport
-    // recomputes for the same sector apply directly instead.
-    if (revealedSectorRef.current === selectedSectorId) {
-      setRevealedPlotShapeCount(plotShapesFull.length);
-      return;
+    // Shrinking (zoom-out tier drop) applies immediately — removals are
+    // cheap. Growing by more than a couple of chunks (initial pin, or a
+    // zoom-in tier upgrade) is staged so hundreds of native polygons never
+    // mount in a single frame — the one-frame bridge spike is a known iOS
+    // react-native-maps crash pattern.
+    setRevealedPlotShapeCount((prev) => {
+      const target = plotLodCount;
+      if (target <= prev) return target;
+      if (target - prev <= PLOT_SHAPE_CHUNK_SIZE * 2) return target;
+      return prev;
+    });
+
+    const prev = revealedCountRef.current;
+    if (plotLodCount > prev + PLOT_SHAPE_CHUNK_SIZE * 2) {
+      return scheduleProgressiveReveal(
+        plotLodCount,
+        (n) => {
+          revealedCountRef.current = n;
+          setRevealedPlotShapeCount(n);
+        },
+        undefined,
+        undefined,
+        prev,
+      );
     }
-    revealedSectorRef.current = selectedSectorId;
-    return scheduleProgressiveReveal(
-      plotShapesFull.length,
-      setRevealedPlotShapeCount,
-    );
-  }, [plotShapesFull, plotsGeometryReady, selectedSectorId]);
+    revealedCountRef.current = plotLodCount;
+  }, [plotLodCount, plotsGeometryReady, selectedSectorId]);
 
   const plotShapesToRender = useMemo(() => {
     if (selectedSectorId == null) return undefined;
     if (isPlotRenderingHandledExternally()) return [];
-    if (!plotsGeometryReady || plotShapesFull.length === 0) return [];
-    return plotShapesFull.slice(0, revealedPlotShapeCount);
+    if (!plotsGeometryReady || orderedPlotShapes.length === 0) return [];
+    return orderedPlotShapes.slice(
+      0,
+      Math.min(revealedPlotShapeCount, plotLodCount),
+    );
   }, [
     selectedSectorId,
-    plotShapesFull,
+    orderedPlotShapes,
     plotsGeometryReady,
     revealedPlotShapeCount,
+    plotLodCount,
   ]);
 
   const plotsRevealReady =

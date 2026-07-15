@@ -10,7 +10,6 @@ import {
   StyleSheet,
   Platform,
   I18nManager,
-  Image,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 import Animated, {
@@ -177,31 +176,6 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
   return (
     <View style={styles.cardShadowWrap}>
       <View style={styles.card}>
-        <View style={styles.header}>
-          <Image
-            source={require("../../assets/logo-bg-white.png")}
-            style={styles.headerLogo}
-            resizeMode="contain"
-          />
-          {isForSale ? (
-            <View style={styles.forSalePill}>
-              <View style={styles.forSaleDot} />
-              <Text style={styles.forSalePillText}>
-                {t("habitatCadastre.card.forSale", "For sale")}
-              </Text>
-            </View>
-          ) : null}
-          <Pressable
-            onPress={dismiss}
-            hitSlop={10}
-            style={styles.closeBtn}
-            accessibilityRole="button"
-            accessibilityLabel={t("common.close", "Close")}
-          >
-            <MaterialIcons name="close" size={16} color={INK} />
-          </Pressable>
-        </View>
-
         <View style={styles.table}>
           {rows.map((row, idx) => (
             <View
@@ -209,9 +183,28 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
               style={[styles.tableRow, idx === rows.length - 1 && !subSectorName && styles.tableRowLast]}
             >
               <View style={styles.valueCell}>
+                {idx === 0 ? (
+                  <Pressable
+                    onPress={dismiss}
+                    hitSlop={12}
+                    style={styles.closeBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("common.close", "Close")}
+                  >
+                    <MaterialIcons name="close" size={15} color={INK} />
+                  </Pressable>
+                ) : null}
                 <Text style={styles.valueText} numberOfLines={2}>
                   {row.value}
                 </Text>
+                {row.key === "elevation" ? (
+                  <MaterialIcons
+                    name="info-outline"
+                    size={14}
+                    color={SUBTLE}
+                    style={styles.infoIcon}
+                  />
+                ) : null}
               </View>
               <View style={styles.labelCell}>
                 <Text style={styles.labelText} numberOfLines={1}>
@@ -552,51 +545,17 @@ const styles = StyleSheet.create({
   card: {
     width: CARD_WIDTH,
     backgroundColor: "#FFFFFF",
-    borderRadius: 20,
+    borderRadius: 10,
     overflow: "hidden",
   },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 10,
-  },
-  headerLogo: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-  },
-  forSalePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: "rgba(220, 38, 38, 0.1)",
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-  },
-  forSaleDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#DC2626",
-  },
-  forSalePillText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#DC2626",
-    letterSpacing: 0.2,
-  },
   closeBtn: {
-    marginLeft: "auto",
-    width: 28,
-    height: 28,
+    width: 22,
+    height: 22,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#F7F7F7",
-    borderRadius: 14,
+  },
+  infoIcon: {
+    marginLeft: "auto",
   },
   /**
    * Official cadastre sheet table — full-width bordered rows, value cell on
@@ -605,47 +564,45 @@ const styles = StyleSheet.create({
    * LTR so the layout matches the reference in RTL app language too.
    */
   table: {
-    marginHorizontal: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: TABLE_BORDER,
-    borderRadius: 8,
-    overflow: "hidden",
+    alignSelf: "stretch",
   },
   tableRow: {
     flexDirection: "row",
     direction: "ltr",
     borderBottomWidth: 1,
     borderBottomColor: TABLE_BORDER,
-    minHeight: 34,
+    minHeight: 38,
   },
   tableRowLast: {
     borderBottomWidth: 0,
   },
   valueCell: {
     flex: 1,
-    justifyContent: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 7,
     backgroundColor: "#FFFFFF",
   },
   valueText: {
-    fontSize: 13,
+    flexShrink: 1,
+    fontSize: 13.5,
     fontWeight: "600",
     color: INK,
     textAlign: "left",
   },
   labelCell: {
-    width: 92,
+    width: 104,
     justifyContent: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: "#F7F7F8",
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    backgroundColor: "#F5F6F8",
     borderLeftWidth: 1,
     borderLeftColor: TABLE_BORDER,
   },
   labelText: {
-    fontSize: 13,
+    fontSize: 13.5,
     fontWeight: "700",
     color: INK,
     textAlign: "right",
@@ -655,11 +612,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 7,
+    paddingVertical: 8,
     backgroundColor: "#FFFFFF",
   },
   footerText: {
-    fontSize: 12.5,
+    fontSize: 13,
     fontWeight: "600",
     color: SUBTLE,
   },

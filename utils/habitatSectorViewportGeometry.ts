@@ -77,13 +77,15 @@ export function scheduleProgressiveReveal(
   onReveal: (count: number) => void,
   chunkSize = PLOT_SHAPE_CHUNK_SIZE,
   delayMs = PLOT_SHAPE_CHUNK_DELAY_MS,
+  /** Resume point — LOD upgrades stage only the delta instead of restarting from zero. */
+  startAt = 0,
 ): () => void {
   if (total <= 0) {
     onReveal(0);
     return () => {};
   }
 
-  let revealed = Math.min(chunkSize, total);
+  let revealed = Math.min(Math.max(startAt, 0) + chunkSize, total);
   onReveal(revealed);
 
   if (revealed >= total) return () => {};
