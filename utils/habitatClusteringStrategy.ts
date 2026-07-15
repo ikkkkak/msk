@@ -1,18 +1,22 @@
 /**
- * Full-sector plot rendering with aggressive caching.
+ * Viewport-culled plot rendering for the native cadastre map.
  *
- * Strategy: Load ALL plots for sector once, cache permanently.
- * - No viewport filtering (all plots cached)
- * - No geometry simplification (full precision locked)
- * - Aggressive preload buffer (2.0x viewport)
- * - No re-fetching on zoom
+ * Strategy (quartier-based loading):
+ * - A quartier's full plot list is fetched once and kept indexed in memory
+ *   (utils/habitatSpatialIndex.ts) — plots are NEVER re-fetched on pan/zoom.
+ * - Rendering is viewport-only: each camera move queries the spatial index
+ *   for plots intersecting the visible region (+50% preload buffer) and
+ *   mounts only those as native polygons, capped at a few hundred.
+ * - Full-precision geometry — no vertex simplification (corners stay locked).
  *
- * Result: All 1,800+ plots render smoothly, never disappear, corners never shift.
+ * Even a 50,000-plot quartier never mounts more than MAX_INDIVIDUAL_PLOTS
+ * native views at once.
  */
 
 import { type Region } from "react-native-maps";
 import type { LatLng } from "../types/habitat";
 import type { HabitatPlot } from "../types/habitat";
+import { queryPlotsInRegion } from "./habitatSpatialIndex";
 
 export interface PlotCluster {
   id: string;
@@ -28,84 +32,55 @@ export interface ViewportPlots {
   totalCount: number;
 }
 
-const CLUSTER_GRID_SIZE_PX = 80; // clustering disabled (see clusterPlotsByGrid)
-const MAX_INDIVIDUAL_PLOTS = 99999; // no cap — render ALL plots in sector
-const VIEWPORT_BUFFER = 3.0; // fetch 200% beyond viewport (extreme preload for zoom smoothness)
-const CLUSTER_MIN_ZOOM = 1; // clustering disabled (set to 1, clustering only happens at zoom < CLUSTER_MIN_ZOOM)
-const SIMPLIFY_THRESHOLD = 0; // NO simplification — keep every vertex at full precision
+/** Hard ceiling on simultaneously mounted plot polygons (native view budget). */
+const MAX_INDIVIDUAL_PLOTS = 250;
+/** Extra viewport fetched around the visible edge so plots don't pop in at the boundary. */
+const VIEWPORT_BUFFER_RATIO = 0.5;
 
 /**
- * DISABLED: Clustering disabled — render all plots individually.
- * No clustering means no plot aggregation, all 1,800+ plots visible at all zoom levels.
+ * Clustering intentionally disabled — plots render individually at every
+ * zoom; density is controlled by viewport culling + the render cap instead.
  */
 export function clusterPlotsByGrid(
-  plots: HabitatPlot[],
-  region: Region,
-  zoom: number,
+  _plots: HabitatPlot[],
+  _region: Region,
+  _zoom: number,
 ): PlotCluster[] {
-  // Return empty — no clustering, all plots rendered individually
   return [];
 }
 
 /**
- * DISABLED: Return ALL plots (cached in memory).
- * No viewport filtering — all plots stay cached forever.
- * This prevents plots from disappearing on zoom.
+ * Viewport culling via spatial index. The quartier's plots all stay cached
+ * and indexed; only those intersecting the buffered viewport are returned,
+ * stride-sampled down to the native render cap when over budget.
  */
 export function filterPlotsByViewport(
   plots: HabitatPlot[],
   region: Region,
-  zoom: number,
+  _zoom: number,
 ): HabitatPlot[] {
-  // Return ALL plots — no viewport filtering
-  return plots;
+  if (plots.length === 0) return [];
+
+  const inView = queryPlotsInRegion(plots, region, VIEWPORT_BUFFER_RATIO);
+  if (inView.length <= MAX_INDIVIDUAL_PLOTS) return inView;
+
+  const stride = Math.ceil(inView.length / MAX_INDIVIDUAL_PLOTS);
+  const out: HabitatPlot[] = [];
+  for (let i = 0; i < inView.length && out.length < MAX_INDIVIDUAL_PLOTS; i += stride) {
+    out.push(inView[i]!);
+  }
+  return out;
 }
 
 /**
- * Simplify polygon coordinates using Visvalingam-Whyatt (area-weighted).
- * When SIMPLIFY_THRESHOLD = 0, returns ring unchanged (full precision).
- * Otherwise reduces vertices while keeping corner precision.
+ * Geometry passthrough — simplification permanently disabled so plot corners
+ * render at full precision at every zoom level.
  */
 export function simplifyRing(ring: LatLng[]): LatLng[] {
-  // If simplification disabled, return full precision
-  if (SIMPLIFY_THRESHOLD === 0) return ring;
-
-  if (ring.length <= 3) return ring;
-
-  // Keep endpoints; simplify interior
-  const simplified = [ring[0]];
-  let skipCount = 0;
-
-  for (let i = 1; i < ring.length - 1; i++) {
-    const prev = simplified[simplified.length - 1];
-    const curr = ring[i];
-    const next = ring[i + 1];
-
-    // Area of triangle formed by prev-curr-next
-    const area = Math.abs(
-      (prev.latitude * (curr.longitude - next.longitude) +
-        curr.latitude * (next.longitude - prev.longitude) +
-        next.latitude * (prev.longitude - curr.longitude)) /
-        2,
-    );
-
-    // Keep if area is significant (not collinear) or we've skipped too many
-    if (area > SIMPLIFY_THRESHOLD || skipCount > 4) {
-      simplified.push(curr);
-      skipCount = 0;
-    } else {
-      skipCount++;
-    }
-  }
-
-  simplified.push(ring[ring.length - 1]);
-  return simplified;
+  return ring;
 }
 
-/**
- * Main filter: return clusters (if zoom <14) OR individual plots (if ≥14),
- * never exceeding native render capacity.
- */
+/** Main filter: viewport-culled individual plots (clustering disabled). */
 export function filterViewportPlots(
   plots: HabitatPlot[],
   region: Region,

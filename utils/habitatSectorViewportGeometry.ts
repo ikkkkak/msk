@@ -1,14 +1,12 @@
 import type { Region } from "react-native-maps";
 import type { HabitatPlot } from "../types/habitat";
 import { habitatApi } from "../services/habitatApi";
-import { bboxFromRegion, zoomFromRegion } from "./habitatGeo";
 import {
   hasStoredPlotGeometry,
   ingestPlotGeometryBatch,
   getPlotRings,
+  isPlotGeometryCached,
 } from "./habitatPlotGeometryCache";
-import { selectPlotsToDraw } from "./habitatViewportPlots";
-import { MAX_NATIVE_MAP_CHILDREN_SECTOR } from "./habitatMapLimits";
 
 /** Minimum zoom before fetching parcel geometry for a pinned quartier. */
 export const MIN_SECTOR_VIEWPORT_ZOOM = 14;
@@ -20,9 +18,13 @@ export type SectorViewportGeometryResult = {
 };
 
 /**
- * FULL SECTOR STRATEGY: Fetch ALL plots for the entire sector once, cache forever.
- * No viewport-based filtering — all 1,800+ plots loaded and cached in memory.
- * This prevents plots from disappearing on zoom.
+ * Quartier geometry load: fetch the pinned quartier's full plot geometry
+ * once (batched), cache it in the geometry LRU, and never refetch on
+ * pan/zoom. Plot ids already in the cache are skipped entirely, so
+ * revisiting a recent quartier costs zero network requests. RENDERING is
+ * viewport-culled downstream (habitatViewportPlots.ts + spatial index) —
+ * caching everything here is what keeps plots from disappearing on zoom
+ * while only a few hundred polygons are ever mounted.
  */
 export async function fetchSectorViewportGeometry(opts: {
   sectorId: number;
@@ -33,18 +35,21 @@ export async function fetchSectorViewportGeometry(opts: {
 }): Promise<SectorViewportGeometryResult> {
   let batchCount = 0;
 
-  // Fetch ALL plots for the entire sector (not just viewport)
-  const allPlotIds = opts.metadata
-    .filter((p) => p.id != null)
-    .map((p) => p.id as number);
+  // LRU hit: skip every plot whose geometry is already cached.
+  const missingPlotIds: number[] = [];
+  for (const p of opts.metadata) {
+    if (p.id == null) continue;
+    if (isPlotGeometryCached(p.id)) continue;
+    missingPlotIds.push(p.id);
+  }
 
-  if (allPlotIds.length > 0) {
+  if (missingPlotIds.length > 0) {
     try {
-      // Fetch in batches to avoid timeout
+      // Batched to avoid request timeouts on large quartiers.
       const batchSize = 1000;
-      for (let i = 0; i < allPlotIds.length; i += batchSize) {
+      for (let i = 0; i < missingPlotIds.length; i += batchSize) {
         const batch = await habitatApi.getPlotGeometryBatch(
-          allPlotIds.slice(i, i + batchSize),
+          missingPlotIds.slice(i, i + batchSize),
         );
         if (batch.length > 0) {
           ingestPlotGeometryBatch(batch);
@@ -56,7 +61,6 @@ export async function fetchSectorViewportGeometry(opts: {
     }
   }
 
-  // Return all metadata plots as drawable (no viewport filtering)
   const drawableCount = opts.metadata.filter(
     (p) =>
       hasStoredPlotGeometry(p) ||

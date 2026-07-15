@@ -236,7 +236,6 @@ export type RootStackParamList = {
     organizationWebsite?: string;
     recipientName?: string;
   };
-  OSMPlotMap: undefined;
 };
 
 export type RootStackScreenProps<Screen extends keyof RootStackParamList> =

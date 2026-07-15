@@ -1,19 +1,18 @@
 /**
- * Cadastre map draw caps — EMERGENCY FALLBACK ONLY.
+ * Cadastre map draw caps — the native map (Apple Maps on iOS, Google Maps
+ * on Android via react-native-maps) is the ONLY rendering path.
  *
- * The real scaling strategy for cadastre plots is GPU vector tiles
- * (components/habitat/HabitatMapLibreCadastre.tsx — MapLibre renders every
- * plot in a quartier via MVT, no React components, no cap needed). These
- * limits exist only for the legacy react-native-maps <Polygon> path, which
- * activates when MapLibre's native module isn't linked into the running
- * binary (see utils/habitatMapLibreNative.ts — that now logs a
- * [GPU_FALLBACK] warning whenever this path engages, so it's visible in
- * production instead of a silent degradation).
+ * Scaling strategy: a pinned quartier's plots are all fetched once and kept
+ * in an in-memory spatial index (utils/habitatSpatialIndex.ts); every camera
+ * move mounts only the plots intersecting the buffered viewport, capped
+ * below. A 1,800-plot (or 50,000-plot) quartier therefore never mounts more
+ * than a few hundred native polygons simultaneously — native polygons
+ * crashed outright at 1,754 mounted at once.
  *
  * Each <Marker> with a custom React Native <View> child consumes ~1–3 MB of
  * native bitmap memory; each <Polygon> consumes proportional to its
  * coordinate count. These caps keep the combined native footprint well below
- * the 150 MB danger zone on all devices in this last-resort path.
+ * the 150 MB danger zone on all devices.
  *
  * NEVER raise these without load-testing on a low-end device (iPhone SE, Galaxy A13).
  */
@@ -45,8 +44,8 @@ export const MAX_PLOT_NUMBER_LABELS = 8;
 export const MAX_NATIVE_MAP_CHILDREN = 250;
 
 /**
- * Max native polygons when a quartier is pinned.
- * Native polygons crashed at 1,754+ plots.
- * Using GitHub Actions + Vector Tiles (MapLibre GL) for production 1,800+ plot rendering.
+ * Max native polygons mounted when a quartier is pinned — the viewport
+ * culling budget. The full quartier stays cached + spatially indexed; this
+ * only caps what's simultaneously mounted as native views.
  */
-export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 120;
+export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 250;

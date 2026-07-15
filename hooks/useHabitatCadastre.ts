@@ -44,7 +44,6 @@ import { habitatPlanColor } from "../utils/habitatMapTheme";
 import {
   buildPlotShapeDescriptors,
   getPlotRings,
-  clearPlotGeometryCache,
   hasStoredPlotGeometry,
   ingestPlotGeometryBatch,
   enrichPlotFromGeometryCache,
@@ -180,11 +179,13 @@ async function fetchSectorPlotsCached(
   truncated: boolean;
   fetchPath: string;
 }> {
-  await queryClient.removeQueries({ queryKey: ["habitatSectorPlots", sectorId] });
+  // LRU quartier cache: a recently visited quartier resolves instantly from
+  // the React Query cache with zero network requests; it refetches only
+  // after SECTOR_PLOTS_STALE_MS.
   return queryClient.fetchQuery({
     queryKey: ["habitatSectorPlots", sectorId],
     queryFn: () => habitatApi.getAllPlotsForSector(sectorId),
-    staleTime: 0,
+    staleTime: SECTOR_PLOTS_STALE_MS,
     gcTime: SECTOR_PLOTS_STALE_MS,
   });
 }
@@ -636,7 +637,10 @@ export function useHabitatCadastre() {
       ++plotViewportGen.current;
       plotBboxAbort.current?.abort();
       plotBboxAbort.current = null;
-      clearPlotGeometryCache();
+      // Geometry cache intentionally NOT cleared on quartier switch — its
+      // 25K-entry FIFO cap bounds memory to roughly the last 3–5 quartiers,
+      // so revisiting a recent quartier redraws instantly with no geometry
+      // refetch (see fetchSectorViewportGeometry, which skips cached ids).
       ++sectorViewportGen.current;
       lastSectorViewportHash.current = "";
       lastPlotFetchRegion.current = null;
@@ -931,7 +935,6 @@ export function useHabitatCadastre() {
       ++applyGen.current;
       ++viewportGen.current;
       ++plotViewportGen.current;
-      clearPlotGeometryCache();
       setSelectedPlanId(planId);
       setSelectedSectorId(null);
       setSelectedSubSectorId(null);
@@ -1162,7 +1165,6 @@ export function useHabitatCadastre() {
     ++viewportGen.current;
     ++plotViewportGen.current;
     ++sectorViewportGen.current;
-    clearPlotGeometryCache();
     setSelectedPlanId(null);
     setSelectedSectorId(null);
     setSelectedSubSectorId(null);

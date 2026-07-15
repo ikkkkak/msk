@@ -1,6 +1,5 @@
 import type { Region } from "react-native-maps";
 import type { HabitatPlot } from "../types/habitat";
-import { bboxFromRegion, coordinateInViewport } from "./habitatGeo";
 import {
   buildPlotShapeDescriptors,
   type PlotShapeDescriptor,
@@ -11,13 +10,18 @@ import {
   MAX_PLOTS_DRAWN,
 } from "./habitatMapLimits";
 import { isCadastreGpuMapActive } from "./habitatCadastreRenderer";
+import { queryPlotsInRegion } from "./habitatSpatialIndex";
 
 /** Pinned quartier — every plot in the quartier (geometry filter happens downstream). */
 export function selectPlotsForSectorDraw(plots: HabitatPlot[]): HabitatPlot[] {
   return plots;
 }
 
-/** Browse mode — viewport sample with cap. */
+/**
+ * Viewport selection — spatial-index query (never a full scan per frame),
+ * then stride-sample down to the native render cap. The full quartier stays
+ * indexed in memory; only what intersects the (buffered) viewport mounts.
+ */
 export function selectPlotsToDraw(
   plots: HabitatPlot[],
   region: Region,
@@ -25,16 +29,7 @@ export function selectPlotsToDraw(
 ): HabitatPlot[] {
   if (plots.length === 0 || max <= 0) return [];
 
-  const bbox = bboxFromRegion(region);
-  const inView: HabitatPlot[] = [];
-  for (const p of plots) {
-    const lat = p.centroid_lat;
-    const lng = p.centroid_lng;
-    if (lat == null || lng == null) continue;
-    if (!coordinateInViewport(lat, lng, bbox, 0.02)) continue;
-    inView.push(p);
-  }
-
+  const inView = queryPlotsInRegion(plots, region, 0.5);
   const pool = inView.length > 0 ? inView : plots;
   if (pool.length <= max) return pool;
 

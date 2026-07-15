@@ -10,7 +10,6 @@ import {
   Easing,
   TouchableOpacity,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
 import MapView, { Region, UrlTile, type MapPressEvent } from "react-native-maps";
 import { useTranslation } from "react-i18next";
 import type {
@@ -183,7 +182,6 @@ export function HabitatCadastreMap({
   landPanelDismissRef,
 }: Props) {
   const { t } = useTranslation();
-  const navigation = useNavigation();
   const [localMapType, setLocalMapType] = useState<MapType>(mapTypeProp);
   const [showPlotLoading, setShowPlotLoading] = useState(false);
   const plotCalloutSyncRef = useRef<(() => void) | null>(null);
@@ -657,7 +655,6 @@ export function HabitatCadastreMap({
             mapRef={cadastreMapRef}
             initialRegion={initialRegion}
             mapRegion={resolvedMapRegion}
-            mapType={mapType}
             viewLevel={viewLevel}
             plans={plans}
             sectors={sectors}
@@ -875,13 +872,6 @@ export function HabitatCadastreMap({
         </View>
       ) : null}
 
-      {/* Try OSM Map Button */}
-      <TouchableOpacity
-        style={styles.osmMapButton}
-        onPress={() => navigation.navigate('OSMPlotMap' as any)}
-      >
-        <Text style={styles.osmMapButtonText}>🗺️ Try OSM Map</Text>
-      </TouchableOpacity>
     </View>
   );
 }
@@ -984,21 +974,5 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     textAlign: "center",
-  },
-  osmMapButton: {
-    position: "absolute",
-    top: 16,
-    right: 16,
-    backgroundColor: "#007AFF",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    ...pillShadow,
-    zIndex: 25,
-  },
-  osmMapButtonText: {
-    color: "#FFF",
-    fontSize: 13,
-    fontWeight: "600",
   },
 });
