@@ -1,13 +1,13 @@
 /**
- * GeoJSON Server Configuration
- * Serves raw GeoJSON from Hetzner server for client-side rendering
+ * Vector Tile Server Configuration
+ * Serves optimized vector tiles from Hetzner server
  */
 
 // ⚠️ CHANGE THIS TO YOUR HETZNER IP
-export const GEOJSON_SERVER_URL = 'http://167.233.98.159:8081';
+export const TILE_SERVER_URL = 'http://167.233.98.159:8080';
 
-// GeoJSON file served directly (146 MB)
-export const GEOJSON_URL = `${GEOJSON_SERVER_URL}/mauritania_plots.geojson`;
+// Vector tile endpoint (PBF format, z/x/y addressing)
+export const TILE_ENDPOINT = `${TILE_SERVER_URL}/data/mauritania/{z}/{x}/{y}.pbf`;
 
 export const MAP_COLORS = {
   available: '#10B981',

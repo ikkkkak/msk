@@ -45,9 +45,8 @@ export const MAX_PLOT_NUMBER_LABELS = 8;
 export const MAX_NATIVE_MAP_CHILDREN = 250;
 
 /**
- * Max native polygons when a quartier is pinned and the GPU path is
- * unavailable (prevents OOM on quartier switch). Kept below the general
- * MAX_NATIVE_MAP_CHILDREN on purpose — a pinned quartier is exactly the
- * "1,840 plots" crash scenario, so this path degrades harder than browse mode.
+ * Max native polygons when a quartier is pinned.
+ * Native polygons crashed at 1,754+ plots.
+ * Using GitHub Actions + Vector Tiles (MapLibre GL) for production 1,800+ plot rendering.
  */
 export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 120;

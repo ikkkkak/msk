@@ -20,9 +20,9 @@ export type SectorViewportGeometryResult = {
 };
 
 /**
- * Layer 2 — fetch geometry only for the visible map viewport (not entire quartier).
- * 1) POSTGIS bbox endpoint (spatial filter on server)
- * 2) Fallback geometry batch for visible lite-metadata rows still missing rings
+ * FULL SECTOR STRATEGY: Fetch ALL plots for the entire sector once, cache forever.
+ * No viewport-based filtering — all 1,800+ plots loaded and cached in memory.
+ * This prevents plots from disappearing on zoom.
  */
 export async function fetchSectorViewportGeometry(opts: {
   sectorId: number;
@@ -31,59 +31,39 @@ export async function fetchSectorViewportGeometry(opts: {
   metadata: HabitatPlot[];
   maxPlots?: number;
 }): Promise<SectorViewportGeometryResult> {
-  const maxPlots = opts.maxPlots ?? MAX_NATIVE_MAP_CHILDREN_SECTOR;
-  const z = zoomFromRegion(opts.region.longitudeDelta);
-  if (z < MIN_SECTOR_VIEWPORT_ZOOM) {
-    return { bboxPlots: 0, batchPlots: 0, drawableCount: 0 };
-  }
-
-  const bbox = bboxFromRegion(opts.region);
-  let bboxCount = 0;
   let batchCount = 0;
 
-  try {
-    const { plots: bboxPlots } = await habitatApi.getPlotsInBBox({
-      minLat: bbox.minLat,
-      minLng: bbox.minLng,
-      maxLat: bbox.maxLat,
-      maxLng: bbox.maxLng,
-      zoom: z,
-      sectorId: opts.sectorId,
-      planId: opts.planId ?? undefined,
-    });
-    if (bboxPlots.length > 0) {
-      ingestPlotGeometryBatch(bboxPlots);
-      bboxCount = bboxPlots.length;
-    }
-  } catch {
-    /* bbox endpoint optional — fall through to id batch */
-  }
+  // Fetch ALL plots for the entire sector (not just viewport)
+  const allPlotIds = opts.metadata
+    .filter((p) => p.id != null)
+    .map((p) => p.id as number);
 
-  const visibleMeta = selectPlotsToDraw(opts.metadata, opts.region, maxPlots);
-  const missingIds = visibleMeta
-    .filter((p) => p.id != null && !hasStoredPlotGeometry(p))
-    .map((p) => p.id as number)
-    .slice(0, maxPlots);
-
-  if (missingIds.length > 0) {
+  if (allPlotIds.length > 0) {
     try {
-      const batch = await habitatApi.getPlotGeometryBatch(missingIds);
-      if (batch.length > 0) {
-        ingestPlotGeometryBatch(batch);
-        batchCount = batch.length;
+      // Fetch in batches to avoid timeout
+      const batchSize = 1000;
+      for (let i = 0; i < allPlotIds.length; i += batchSize) {
+        const batch = await habitatApi.getPlotGeometryBatch(
+          allPlotIds.slice(i, i + batchSize),
+        );
+        if (batch.length > 0) {
+          ingestPlotGeometryBatch(batch);
+          batchCount += batch.length;
+        }
       }
     } catch {
-      /* partial viewport is acceptable */
+      /* partial load acceptable */
     }
   }
 
-  const drawableCount = visibleMeta.filter(
+  // Return all metadata plots as drawable (no viewport filtering)
+  const drawableCount = opts.metadata.filter(
     (p) =>
       hasStoredPlotGeometry(p) ||
       getPlotRings(p, { allowCentroidFallback: false }).length > 0,
   ).length;
 
-  return { bboxPlots: bboxCount, batchPlots: batchCount, drawableCount };
+  return { bboxPlots: 0, batchPlots: batchCount, drawableCount };
 }
 
 /** Progressive native polygon reveal — avoids 1754 polygons in one frame. */
