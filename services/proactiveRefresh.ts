@@ -28,7 +28,16 @@ export async function ensureValidAccessToken(): Promise<string | null> {
     if (!needsRefresh) return access;
 
     const refreshed = await refreshSessionTokens();
-    return refreshed?.accessToken ?? null;
+    if (refreshed?.accessToken) return refreshed.accessToken;
+
+    // Refresh unavailable right now (rate limit, network blip, server hiccup)
+    // but the current access token is still inside its lifetime — keep
+    // authenticating with it instead of silently downgrading every API call
+    // to anonymous. This was the "logged-in user gets 401 ← anonymous" bug:
+    // the proactive-refresh window starts 5 minutes BEFORE expiry, and a
+    // failed early refresh threw away a perfectly valid token.
+    if (access && !isAccessTokenExpired(access)) return access;
+    return null;
   })();
 
   try {

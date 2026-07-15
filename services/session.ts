@@ -3,12 +3,20 @@ import type { User } from "../types/user";
 import { getStoredUser } from "./userStorage";
 import { tokenStorage } from "./tokenStorage";
 import { emitAuthFailure, emitTokensRefreshed } from "./authEvents";
+import { getOrCreateDeviceId } from "../utils/deviceId";
 
 let refreshInFlight: Promise<{
   user: User;
   accessToken: string;
   refreshToken: string;
 } | null> | null = null;
+
+/**
+ * Server-asked cooldown (429 Retry-After). While active, refresh attempts
+ * short-circuit to null instead of re-hitting the rate limit — callers keep
+ * using the current access token via ensureValidAccessToken's fallback.
+ */
+let refreshBackoffUntil = 0;
 
 async function buildUser(
   profile: Omit<User, "accessToken" | "refreshToken"> | null,
@@ -36,6 +44,9 @@ export async function refreshSessionTokens(): Promise<{
   if (refreshInFlight) {
     return refreshInFlight;
   }
+  if (Date.now() < refreshBackoffUntil) {
+    return null;
+  }
 
   refreshInFlight = (async () => {
     const stored = await tokenStorage.getRefresh();
@@ -43,6 +54,16 @@ export async function refreshSessionTokens(): Promise<{
 
     const profile = await getStoredUser();
     if (!profile) return null;
+
+    // X-Device-ID keys the server's refresh rate limit per device (not per
+    // carrier-NAT IP) and lets rotation bind the new token to this device.
+    let deviceId: string | undefined;
+    try {
+      deviceId = await getOrCreateDeviceId();
+    } catch {
+      /* refresh still works without it */
+    }
+    const headers = deviceId ? { "X-Device-ID": deviceId } : undefined;
 
     const tryRefresh = async (): Promise<{
       user: User;
@@ -52,10 +73,10 @@ export async function refreshSessionTokens(): Promise<{
       const body = { refresh_token: stored, refreshToken: stored };
       let res;
       try {
-        res = await publicApi.post(`/token/refresh`, body);
+        res = await publicApi.post(`/token/refresh`, body, { headers });
       } catch (err: any) {
         if (err?.response?.status === 404) {
-          res = await publicApi.post(`/auth/refresh`, body);
+          res = await publicApi.post(`/auth/refresh`, body, { headers });
         } else {
           throw err;
         }
@@ -79,6 +100,18 @@ export async function refreshSessionTokens(): Promise<{
       result = await tryRefresh();
     } catch (err: any) {
       const status = err?.response?.status;
+      // Rate limited: honor Retry-After and stop hammering the endpoint.
+      // The session survives — the access token keeps working via the
+      // still-valid-token fallback until the cooldown passes.
+      if (status === 429) {
+        const retryAfter = Number(err?.response?.headers?.["retry-after"]);
+        const waitMs =
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? Math.min(retryAfter, 120) * 1000
+            : 60_000;
+        refreshBackoffUntil = Date.now() + waitMs;
+        return null;
+      }
       // Retry once on network/timeout so a brief blip doesn't log the user out
       if (isNetworkOrTimeoutError(err)) {
         try {
