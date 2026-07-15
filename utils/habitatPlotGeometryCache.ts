@@ -41,8 +41,15 @@ const ringsByPlotId = new Map<number, LatLng[][]>();
 const geometrySourceByPlotId = new Map<number, StoredGeometry>();
 const metadataByPlotId = new Map<number, StoredMetadata>();
 
-/** Parsed rings cache — small; geometry sources can hold a full quartier index. */
-const RINGS_CACHE_CAP = 1_500;
+/**
+ * Parsed rings cache — MUST hold the largest quartier (8K plots) with room
+ * to spare. Ring array identity is what PlotGroup's memo comparator keys
+ * on; if this cache evicts mid-quartier, ring identities churn and every
+ * native polygon gets torn down and re-created on the next render pass —
+ * that identity churn at ~1,750 mounted polygons is the crash pattern this
+ * architecture exists to prevent.
+ */
+const RINGS_CACHE_CAP = 10_000;
 const GEOMETRY_SOURCE_CAP = 25_000;
 
 function trimCache<K, V>(map: Map<K, V>, cap: number): void {

@@ -1387,7 +1387,8 @@ export function useHabitatCadastre() {
     return withGeom;
   }, [plotsSource, selectedSectorId, selectedPlot]);
 
-  const plotShapesFull = useMemo(() => {
+  /** All drawable plots of the pinned quartier — recomputes only when the dataset changes, never on pan/zoom. */
+  const sectorDrawablePlots = useMemo(() => {
     if (isPlotRenderingHandledExternally() && selectedSectorId != null) return [];
     if (selectedSectorId == null) return [];
     if (!plotsGeometryReady || sectorPlots.length === 0) return [];
@@ -1398,13 +1399,38 @@ export function useHabitatCadastre() {
     if (selectedSubSectorId != null) {
       inSector = inSector.filter((p) => p.sub_sector_id === selectedSubSectorId);
     }
-    const drawable = inSector.filter(
+    return inSector.filter(
       (p) => hasStoredPlotGeometry(p) || getPlotRings(p).length > 0,
     );
-    if (drawable.length === 0) return [];
+  }, [
+    selectedSectorId,
+    selectedSubSectorId,
+    sectorPlots,
+    plotGeometryRevision,
+    plotsGeometryReady,
+  ]);
+
+  /**
+   * STATIC path — quartier fits the native budget (≤ MAX_NATIVE_MAP_CHILDREN_SECTOR,
+   * e.g. all 1,800 plots): build the full shape set ONCE per quartier.
+   * Deliberately independent of the camera region, so panning/zooming never
+   * rebuilds, re-diffs, or churns the mounted polygons — the identity churn
+   * of rebuilding ~1,800 shapes per camera move is what crashed the native
+   * map, not the steady-state overlay count.
+   */
+  const sectorShapesStatic = useMemo(() => {
+    if (sectorDrawablePlots.length === 0) return null;
+    if (sectorDrawablePlots.length > MAX_NATIVE_MAP_CHILDREN_SECTOR) return null;
+    return buildSectorPlotShapes(sectorDrawablePlots);
+  }, [sectorDrawablePlots]);
+
+  /** VIEWPORT path — oversized quartiers (4K–8K): spatial-index culling per camera move. */
+  const plotShapesFull = useMemo(() => {
+    if (sectorDrawablePlots.length === 0) return [];
+    if (sectorShapesStatic != null) return sectorShapesStatic;
 
     let picked = selectPlotsToDraw(
-      drawable,
+      sectorDrawablePlots,
       debouncedRegion,
       MAX_NATIVE_MAP_CHILDREN_SECTOR,
     );
@@ -1412,15 +1438,7 @@ export function useHabitatCadastre() {
       picked = mergePlotIntoList(picked, selectedPlot);
     }
     return capPlotShapesForSector(buildSectorPlotShapes(picked));
-  }, [
-    selectedSectorId,
-    selectedSubSectorId,
-    sectorPlots,
-    selectedPlot,
-    plotGeometryRevision,
-    plotsGeometryReady,
-    debouncedRegion,
-  ]);
+  }, [sectorDrawablePlots, sectorShapesStatic, selectedPlot, debouncedRegion]);
 
   useEffect(() => {
     if (

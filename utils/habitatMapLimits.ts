@@ -44,8 +44,15 @@ export const MAX_PLOT_NUMBER_LABELS = 8;
 export const MAX_NATIVE_MAP_CHILDREN = 250;
 
 /**
- * Max native polygons mounted when a quartier is pinned — the viewport
- * culling budget. The full quartier stays cached + spatially indexed; this
- * only caps what's simultaneously mounted as native views.
+ * Max native polygons mounted when a quartier is pinned.
+ *
+ * Quartiers at or under this count mount ALL their plots as one STATIC set
+ * (built once per quartier, never rebuilt on pan/zoom) — map polygons are
+ * GPU overlays (MKPolygon / GMaps polygon), not views, and a static set of
+ * ~2K is fine on both platforms. The earlier 1,754-plot crash came from the
+ * set being re-created and re-diffed on every camera move (identity churn),
+ * not from the steady-state overlay count — that churn is what the static
+ * path eliminates. Quartiers above this (4K–8K) fall back to spatial-index
+ * viewport culling with this same number as the mounted cap.
  */
-export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 250;
+export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 2000;
