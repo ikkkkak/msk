@@ -62,9 +62,7 @@ export async function fetchSectorViewportGeometry(opts: {
   }
 
   const drawableCount = opts.metadata.filter(
-    (p) =>
-      hasStoredPlotGeometry(p) ||
-      getPlotRings(p, { allowCentroidFallback: false }).length > 0,
+    (p) => hasStoredPlotGeometry(p) || getPlotRings(p).length > 0,
   ).length;
 
   return { bboxPlots: 0, batchPlots: batchCount, drawableCount };

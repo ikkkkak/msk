@@ -498,7 +498,7 @@ function HabitatMapLayersInner({
 
     // Render individual plots (high zoom)
     for (const plot of filtered.individual) {
-      let rings = getPlotRings(plot, { allowCentroidFallback: false });
+      let rings = getPlotRings(plot);
       // Simplify geometry to reduce native render cost
       rings = rings.map((ring) => simplifyRing(ring));
       const labelAt = plotLabelCoordinate(plot);

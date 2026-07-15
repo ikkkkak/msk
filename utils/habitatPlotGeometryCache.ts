@@ -194,23 +194,35 @@ export function ingestPlotGeometryBatch(plots: HabitatPlot[]): void {
   }
 }
 
-/** Cached plot rings — avoids re-parsing GeoJSON on every map render. */
+/**
+ * Cached plot rings — avoids re-parsing GeoJSON on every map render, and the
+ * cached array identity is what keeps native polygons stable across renders.
+ *
+ * Always applies the FULL fallback chain: stored GeoJSON → corners → a
+ * rectangle at the plot's true centroid using its real length/width. A plot
+ * with weak geometry data renders an honest dimensioned footprint instead of
+ * silently disappearing from the quartier — the server synthesizes the same
+ * fallback into geom_geojson now, so this mostly covers stale caches and
+ * plots whose metadata arrived before their geometry.
+ *
+ * Empty results are NOT cached: if centroid/dimensions haven't arrived yet,
+ * the next call re-derives once they have, without explicit invalidation.
+ */
 export function getPlotRings(
   plot: HabitatPlot,
-  opts: PlotPolygonOptions = {},
+  _opts: PlotPolygonOptions = {},
 ): LatLng[][] {
   const enriched = plotWithStoredGeometry(plot);
   const id = enriched.id;
-  const allowFallback = opts.allowCentroidFallback === true;
-  if (id != null && !allowFallback) {
+  if (id != null) {
     const cached = ringsByPlotId.get(id);
     if (cached) return cached;
   }
 
   const rings = extractPlotPolygons(enriched, {
-    allowCentroidFallback: allowFallback,
+    allowCentroidFallback: true,
   });
-  if (id != null && !allowFallback) {
+  if (id != null && rings.length > 0) {
     trimCache(ringsByPlotId, RINGS_CACHE_CAP);
     ringsByPlotId.set(id, rings);
   }
@@ -230,7 +242,7 @@ export function buildPlotShapeDescriptors(
   const out: PlotShapeDescriptor[] = [];
   for (const plot of plots) {
     const enriched = plotWithStoredGeometry(plot);
-    const rings = getPlotRings(enriched, { allowCentroidFallback: false });
+    const rings = getPlotRings(enriched);
     if (!rings.length) continue;
     const labelAt = plotLabelCoordinate(enriched);
     out.push({ plot: enriched, rings, labelAt });
