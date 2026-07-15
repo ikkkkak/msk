@@ -1,7 +1,13 @@
 import { publicApi } from "./api";
-import type { HabitatPlan, HabitatPlot, HabitatSector } from "../types/habitat";
+import type {
+  HabitatPlan,
+  HabitatPlot,
+  HabitatSector,
+  HabitatSubSector,
+} from "../types/habitat";
 import { logCadastreApiRequest } from "../hooks/habitatCadastreLog";
 import type { HabitatTileJson } from "../utils/habitatVectorTiles";
+import { slimSectorPlotList } from "../utils/habitatPlotGeometryCache";
 
 type ApiList<T> = { success?: boolean; data: T[] };
 type ApiOne<T> = { success?: boolean; data: T };
@@ -18,7 +24,34 @@ type SectorPlotFetchOpts = {
 };
 
 const SECTOR_PAGE_SIZE = 500;
-const GEOMETRY_BATCH_SIZE = 120;
+const SECTOR_PAGE_FETCH_CONCURRENCY = 4;
+const GEOMETRY_BATCH_SIZE = 50;
+const GEOMETRY_FETCH_CONCURRENCY = 4;
+const TILE_JSON_CACHE_MS = 30 * 60 * 1000;
+
+const tileJsonMemoryCache = new Map<
+  number,
+  { at: number; data: HabitatTileJson }
+>();
+
+const geometryBatchInFlight = new Map<string, Promise<HabitatPlot[]>>();
+
+function slimSectorPlotsJsonResponse(data: unknown): unknown {
+  let parsed = data;
+  if (typeof data === "string") {
+    try {
+      parsed = JSON.parse(data) as unknown;
+    } catch {
+      return data;
+    }
+  }
+  if (!parsed || typeof parsed !== "object") return parsed;
+  const body = parsed as Paginated<HabitatPlot> & { meta?: { total?: number } };
+  if (Array.isArray(body.data)) {
+    body.data = slimSectorPlotList(body.data);
+  }
+  return body;
+}
 
 export const habitatApi = {
   async getPlans(): Promise<HabitatPlan[]> {
@@ -39,6 +72,128 @@ export const habitatApi = {
       quartiers_count: sectors.length,
     });
     return sectors;
+  },
+
+  async getSubSectors(sectorId: number): Promise<HabitatSubSector[]> {
+    const path = `/habitat/sectors/${sectorId}/sub-sectors`;
+    logCadastreApiRequest("GET", path, { sector_id: sectorId });
+    const res = await publicApi.get<ApiList<HabitatSubSector>>(path);
+    const subSectors = res.data?.data ?? [];
+    logCadastreApiRequest("GET", path, { sector_id: sectorId }, {
+      sub_sectors_count: subSectors.length,
+    });
+    return subSectors;
+  },
+
+  async getSubSector(subSectorId: number): Promise<HabitatSubSector | null> {
+    const res = await publicApi.get<ApiOne<HabitatSubSector>>(
+      `/habitat/sub-sectors/${subSectorId}`,
+    );
+    return res.data?.data ?? null;
+  },
+
+  /** Same paginate-until-complete strategy as getAllPlotsForSector, scoped to one sub-sector. */
+  async getAllPlotsForSubSector(
+    subSectorId: number,
+    opts?: {
+      onPage?: (chunk: HabitatPlot[], loaded: number, total: number) => void;
+    },
+  ): Promise<{
+    plots: HabitatPlot[];
+    total: number;
+    truncated: boolean;
+    fetchPath: string;
+  }> {
+    const subSectorPath = `/habitat/sub-sectors/${subSectorId}/plots`;
+    const t0 = performance.now();
+
+    const first = await this.getPlotsForSubSector(
+      subSectorId,
+      1,
+      SECTOR_PAGE_SIZE,
+      { lite: true },
+    );
+    const total = first.pagination?.total ?? first.plots.length;
+    const totalPages = first.pagination?.total_pages ?? 1;
+
+    const all: HabitatPlot[] = slimSectorPlotList(first.plots);
+    opts?.onPage?.(all, all.length, total);
+
+    if (totalPages > 1 && all.length < total) {
+      const remainingPages: number[] = [];
+      for (let p = 2; p <= totalPages; p++) remainingPages.push(p);
+
+      for (
+        let i = 0;
+        i < remainingPages.length;
+        i += SECTOR_PAGE_FETCH_CONCURRENCY
+      ) {
+        const wave = remainingPages.slice(i, i + SECTOR_PAGE_FETCH_CONCURRENCY);
+        const waveResults = await Promise.all(
+          wave.map((p) =>
+            this.getPlotsForSubSector(subSectorId, p, SECTOR_PAGE_SIZE, {
+              lite: true,
+            }),
+          ),
+        );
+        for (const { plots } of waveResults) {
+          const slim = slimSectorPlotList(plots);
+          all.push(...slim);
+          opts?.onPage?.(slim, all.length, total);
+        }
+      }
+    }
+
+    const fetchPath = `GET ${subSectorPath}?lite=true&page=1..${totalPages}&limit=${SECTOR_PAGE_SIZE}&concurrency=${SECTOR_PAGE_FETCH_CONCURRENCY}`;
+    logCadastreApiRequest("GET", subSectorPath, { lite: true, paginated: true }, {
+      plots_loaded: all.length,
+      plots_in_db: total,
+      pages_fetched: totalPages,
+      fetch_path: fetchPath,
+      duration_ms: Math.round(performance.now() - t0),
+    });
+
+    return {
+      plots: all,
+      total,
+      truncated: all.length < total,
+      fetchPath,
+    };
+  },
+
+  async getPlotsForSubSector(
+    subSectorId: number,
+    page = 1,
+    limit = SECTOR_PAGE_SIZE,
+    opts?: Omit<SectorPlotFetchOpts, "page" | "limit">,
+  ): Promise<{ plots: HabitatPlot[]; pagination?: Paginated<HabitatPlot>["pagination"] }> {
+    const path = `/habitat/sub-sectors/${subSectorId}/plots`;
+    const params: Record<string, string | number | boolean> = { page, limit };
+    if (opts?.map) params.map = true;
+    if (opts?.lite) params.lite = true;
+    if (opts?.all) params.all = true;
+    logCadastreApiRequest("GET", path, params);
+    const res = await publicApi.get<Paginated<HabitatPlot>>(path, {
+      params: {
+        page,
+        limit,
+        ...(opts?.map ? { map: true } : {}),
+        ...(opts?.lite ? { lite: true } : {}),
+        ...(opts?.all ? { all: true } : {}),
+      },
+      timeout: opts?.all ? 180000 : 60000,
+      ...(opts?.lite ? { transformResponse: [slimSectorPlotsJsonResponse] } : {}),
+    });
+    const plots = res.data?.data ?? [];
+    logCadastreApiRequest("GET", path, params, {
+      plots_returned: plots.length,
+      total: res.data?.pagination?.total,
+      page: res.data?.pagination?.page,
+    });
+    return {
+      plots,
+      pagination: res.data?.pagination,
+    };
   },
 
   async lookupPlotForLandListing(
@@ -80,20 +235,41 @@ export const habitatApi = {
     };
   },
 
+  /**
+   * subSectorId narrows the match to one Ilot subdivision — without it, a
+   * sector that has sub-sectors can return a plot number that actually
+   * belongs to a *different* sub-sector than the one being browsed, which
+   * reads as a random/wrong result to the user.
+   */
   async lookupPlotInSector(
     sectorId: number,
     plotNumber: string,
+    subSectorId?: number | null,
   ): Promise<{
     plot: HabitatPlot | null;
-    meta?: { resolved?: boolean; match_kind?: string; reason?: string };
+    meta?: {
+      resolved?: boolean;
+      match_kind?: string;
+      reason?: string;
+      sub_sector_id?: number | null;
+    };
   }> {
     const path = "/habitat/plots/lookup_in_sector";
-    const params = { sector_id: sectorId, plot_number: plotNumber.trim() };
+    const params: Record<string, string | number> = {
+      sector_id: sectorId,
+      plot_number: plotNumber.trim(),
+    };
+    if (subSectorId != null) params.sub_sector_id = subSectorId;
     const t0 = performance.now();
     logCadastreApiRequest("GET", path, params);
     const res = await publicApi.get<
       ApiOne<HabitatPlot | null> & {
-        meta?: { resolved?: boolean; match_kind?: string; reason?: string };
+        meta?: {
+          resolved?: boolean;
+          match_kind?: string;
+          reason?: string;
+          sub_sector_id?: number | null;
+        };
       }
     >(path, {
       params,
@@ -136,11 +312,20 @@ export const habitatApi = {
 
   /**
    * Load every plot for a sector (metadata only — no geometry).
-   * Paginates until the server total is reached so quartiers are never partially loaded.
+   * Paginates until all plots are loaded — no count cap.
+   *
+   * Page 1 is fetched alone (it's the only way to learn total_pages), then
+   * every remaining page is fetched in bounded-concurrency waves — same
+   * pattern as fetchPlotGeometryBatchInternal below. A large quartier
+   * (8K+ plots = ~16 pages at 500/page) was taking one full network
+   * round-trip *per page, sequentially* — several seconds of dead time on
+   * every quartier select. This cuts that to ceil(totalPages/4) round-trips.
    */
   async getAllPlotsForSector(
     sectorId: number,
-    maxPlots = 20000,
+    opts?: {
+      onPage?: (chunk: HabitatPlot[], loaded: number, total: number) => void;
+    },
   ): Promise<{
     plots: HabitatPlot[];
     total: number;
@@ -148,75 +333,49 @@ export const habitatApi = {
     fetchPath: string;
   }> {
     const sectorPath = `/habitat/sectors/${sectorId}/plots`;
-    const targetCount = Math.min(maxPlots, await this.getSectorPlotCount(sectorId));
-    if (targetCount === 0) {
-      logCadastreApiRequest("GET", sectorPath, { all: true, lite: true }, {
-        plots_loaded: 0,
-        plots_in_db: 0,
-        fetch_path: "empty sector",
-      });
-      return { plots: [], total: 0, truncated: false, fetchPath: "empty sector" };
-    }
+    const t0 = performance.now();
 
-    if (targetCount <= maxPlots) {
-      try {
-        logCadastreApiRequest("GET", sectorPath, { all: true, lite: true });
-        const res = await publicApi.get<
-          Paginated<HabitatPlot> & { meta?: { total?: number; truncated?: boolean } }
-        >(sectorPath, {
-          params: { all: true, lite: true },
-          timeout: 180000,
-        });
-        const plots = res.data?.data ?? [];
-        const total = res.data?.meta?.total ?? res.data?.pagination?.total ?? plots.length;
-        if (plots.length >= Math.min(total, maxPlots)) {
-          const fetchPath = `GET ${sectorPath}?all=true&lite=true`;
-          logCadastreApiRequest("GET", sectorPath, { all: true, lite: true }, {
-            plots_loaded: plots.length,
-            plots_in_db: total,
-            fetch_path: fetchPath,
-          });
-          return {
-            plots: plots.slice(0, maxPlots),
-            total,
-            truncated: plots.length < total || total > maxPlots,
-            fetchPath,
-          };
+    const first = await this.getPlots(sectorId, 1, SECTOR_PAGE_SIZE, {
+      lite: true,
+    });
+    const total = first.pagination?.total ?? first.plots.length;
+    const totalPages = first.pagination?.total_pages ?? 1;
+
+    const all: HabitatPlot[] = slimSectorPlotList(first.plots);
+    opts?.onPage?.(all, all.length, total);
+
+    if (totalPages > 1 && all.length < total) {
+      const remainingPages: number[] = [];
+      for (let p = 2; p <= totalPages; p++) remainingPages.push(p);
+
+      for (
+        let i = 0;
+        i < remainingPages.length;
+        i += SECTOR_PAGE_FETCH_CONCURRENCY
+      ) {
+        const wave = remainingPages.slice(i, i + SECTOR_PAGE_FETCH_CONCURRENCY);
+        const waveResults = await Promise.all(
+          wave.map((p) => this.getPlots(sectorId, p, SECTOR_PAGE_SIZE, { lite: true })),
+        );
+        for (const { plots } of waveResults) {
+          const slim = slimSectorPlotList(plots);
+          all.push(...slim);
+          opts?.onPage?.(slim, all.length, total);
         }
-      } catch {
-        // Fall through to pagination.
       }
     }
 
-    const all: HabitatPlot[] = [];
-    let page = 1;
-    let total = targetCount;
-    let totalPages = Math.ceil(targetCount / SECTOR_PAGE_SIZE);
-
-    while (page <= totalPages && all.length < maxPlots) {
-      const { plots, pagination } = await this.getPlots(sectorId, page, SECTOR_PAGE_SIZE, {
-        lite: true,
-      });
-      if (plots.length === 0) break;
-
-      all.push(...plots);
-      total = pagination?.total ?? total;
-      totalPages = pagination?.total_pages ?? totalPages;
-
-      if (all.length >= total) break;
-      page += 1;
-    }
-
-    const fetchPath = `GET ${sectorPath}?lite=true&page=1..${page}&limit=${SECTOR_PAGE_SIZE}`;
+    const fetchPath = `GET ${sectorPath}?lite=true&page=1..${totalPages}&limit=${SECTOR_PAGE_SIZE}&concurrency=${SECTOR_PAGE_FETCH_CONCURRENCY}`;
     logCadastreApiRequest("GET", sectorPath, { lite: true, paginated: true }, {
       plots_loaded: all.length,
       plots_in_db: total,
-      pages_fetched: page,
+      pages_fetched: totalPages,
       fetch_path: fetchPath,
+      duration_ms: Math.round(performance.now() - t0),
     });
 
     return {
-      plots: all.slice(0, maxPlots),
+      plots: all,
       total,
       truncated: all.length < total,
       fetchPath,
@@ -244,6 +403,7 @@ export const habitatApi = {
         ...(opts?.all ? { all: true } : {}),
       },
       timeout: opts?.all ? 180000 : 60000,
+      ...(opts?.lite ? { transformResponse: [slimSectorPlotsJsonResponse] } : {}),
     });
     const plots = res.data?.data ?? [];
     logCadastreApiRequest("GET", path, params, {
@@ -259,44 +419,74 @@ export const habitatApi = {
 
   /** Fetch polygon geometry for visible plots only (keeps bulk index lightweight). */
   async getPlotGeometryBatch(plotIds: number[]): Promise<HabitatPlot[]> {
-    const unique = [...new Set(plotIds.filter((id) => id > 0))];
+    const unique = [...new Set(plotIds.filter((id) => id > 0))].sort(
+      (a, b) => a - b,
+    );
     if (unique.length === 0) return [];
 
-    const out: HabitatPlot[] = [];
-    const batchCount = Math.ceil(unique.length / GEOMETRY_BATCH_SIZE);
+    const dedupeKey = unique.join(",");
+    const inFlight = geometryBatchInFlight.get(dedupeKey);
+    if (inFlight) return inFlight;
+
+    const promise = this.fetchPlotGeometryBatchInternal(unique);
+    geometryBatchInFlight.set(dedupeKey, promise);
+    try {
+      return await promise;
+    } finally {
+      geometryBatchInFlight.delete(dedupeKey);
+    }
+  },
+
+  async fetchPlotGeometryBatchInternal(
+    unique: number[],
+  ): Promise<HabitatPlot[]> {
+    const chunks: number[][] = [];
+    for (let i = 0; i < unique.length; i += GEOMETRY_BATCH_SIZE) {
+      chunks.push(unique.slice(i, i + GEOMETRY_BATCH_SIZE));
+    }
+
+    const t0 = performance.now();
     logCadastreApiRequest("GET", "/habitat/plots/geometry", {
       plot_ids: unique.length,
-      batches: batchCount,
+      batches: chunks.length,
+      concurrency: GEOMETRY_FETCH_CONCURRENCY,
     });
-    for (let i = 0; i < unique.length; i += GEOMETRY_BATCH_SIZE) {
-      const chunk = unique.slice(i, i + GEOMETRY_BATCH_SIZE);
-      const batchNum = Math.floor(i / GEOMETRY_BATCH_SIZE) + 1;
+
+    const fetchChunk = async (chunk: number[], batchNum: number): Promise<HabitatPlot[]> => {
       try {
-        logCadastreApiRequest("GET", "/habitat/plots/geometry", {
-          batch: batchNum,
-          ids_count: chunk.length,
-        });
         const res = await publicApi.get<ApiList<HabitatPlot>>("/habitat/plots/geometry", {
           params: { ids: chunk.join(",") },
           timeout: 30000,
         });
-        const batch = res.data?.data ?? [];
-        logCadastreApiRequest("GET", "/habitat/plots/geometry", {
-          batch: batchNum,
-          ids_count: chunk.length,
-        }, { plots_returned: batch.length });
-        out.push(...batch);
+        return res.data?.data ?? [];
       } catch {
-        for (const id of chunk) {
-          const plot = await this.getPlot(id);
-          if (plot) out.push(plot);
-        }
+        const fallback: HabitatPlot[] = [];
+        await Promise.all(
+          chunk.map(async (id) => {
+            const plot = await this.getPlot(id);
+            if (plot) fallback.push(plot);
+          }),
+        );
+        return fallback;
       }
+    };
+
+    const out: HabitatPlot[] = [];
+    for (let i = 0; i < chunks.length; i += GEOMETRY_FETCH_CONCURRENCY) {
+      const wave = chunks.slice(i, i + GEOMETRY_FETCH_CONCURRENCY);
+      const waveResults = await Promise.all(
+        wave.map((chunk, idx) => fetchChunk(chunk, i + idx + 1)),
+      );
+      for (const batch of waveResults) out.push(...batch);
     }
+
     logCadastreApiRequest("GET", "/habitat/plots/geometry", {
       plot_ids: unique.length,
-      batches: batchCount,
-    }, { total_geometry_plots: out.length });
+      batches: chunks.length,
+    }, {
+      total_geometry_plots: out.length,
+      duration_ms: Math.round(performance.now() - t0),
+    });
     return out;
   },
 
@@ -319,23 +509,46 @@ export const habitatApi = {
     return landmarkId > 0 ? landmarkId : null;
   },
 
-  async searchCadastre(q: string): Promise<{
+  /**
+   * scope narrows the plot half of the results to one sector/sub-sector —
+   * pass it whenever the user is already browsing a specific area, so a
+   * plot-number search doesn't surface a same-numbered plot from an
+   * unrelated part of the city.
+   */
+  async searchCadastre(
+    q: string,
+    scope?: { sectorId?: number | null; subSectorId?: number | null },
+  ): Promise<{
     plans: HabitatPlan[];
     sectors: HabitatSector[];
+    subSectors: HabitatSubSector[];
     plots: HabitatPlot[];
   }> {
     const res = await publicApi.get<{
       data:
         | HabitatPlot[]
-        | { plans?: HabitatPlan[]; sectors?: HabitatSector[]; plots?: HabitatPlot[] };
-    }>("/habitat/search", { params: { q }, timeout: 15000 });
+        | {
+            plans?: HabitatPlan[];
+            sectors?: HabitatSector[];
+            sub_sectors?: HabitatSubSector[];
+            plots?: HabitatPlot[];
+          };
+    }>("/habitat/search", {
+      params: {
+        q,
+        ...(scope?.sectorId ? { sector_id: scope.sectorId } : {}),
+        ...(scope?.subSectorId ? { sub_sector_id: scope.subSectorId } : {}),
+      },
+      timeout: 15000,
+    });
     const data = res.data?.data;
     if (Array.isArray(data)) {
-      return { plans: [], sectors: [], plots: data };
+      return { plans: [], sectors: [], subSectors: [], plots: data };
     }
     return {
       plans: data?.plans ?? [],
       sectors: data?.sectors ?? [],
+      subSectors: data?.sub_sectors ?? [],
       plots: data?.plots ?? [],
     };
   },
@@ -388,9 +601,46 @@ export const habitatApi = {
   },
 
   async getSectorTileJson(sectorId: number): Promise<HabitatTileJson | null> {
+    const cached = tileJsonMemoryCache.get(sectorId);
+    if (cached && Date.now() - cached.at < TILE_JSON_CACHE_MS) {
+      return cached.data;
+    }
+
     const path = `/habitat/sectors/${sectorId}/tiles.json`;
-    logCadastreApiRequest("GET", path, { sector_id: sectorId });
-    const res = await publicApi.get<HabitatTileJson>(path, { timeout: 15000 });
-    return res.data ?? null;
+    const t0 = performance.now();
+    logCadastreApiRequest("GET", path, { sector_id: sectorId, cache: "miss" });
+    const res = await publicApi.get<HabitatTileJson>(path, { timeout: 12000 });
+    const data = res.data ?? null;
+    logCadastreApiRequest("GET", path, { sector_id: sectorId }, {
+      duration_ms: Math.round(performance.now() - t0),
+      plot_count: data?.plot_count,
+      cache: data ? "store" : "empty",
+    });
+    if (data) {
+      tileJsonMemoryCache.set(sectorId, { at: Date.now(), data });
+    }
+    return data;
+  },
+
+  /**
+   * Point-in-polygon lookup for the native-map raster overlay path — the
+   * overlay is a flat PNG with no built-in tap detection, so a map tap
+   * resolves to a plot via this instead of a feature-press event.
+   */
+  async getPlotAtPoint(
+    sectorId: number,
+    lat: number,
+    lng: number,
+  ): Promise<number | null> {
+    const path = `/habitat/sectors/${sectorId}/plot-at-point`;
+    const params = { lat, lng };
+    logCadastreApiRequest("GET", path, params);
+    const res = await publicApi.get<ApiOne<{ plot_id?: number } | null>>(path, {
+      params,
+      timeout: 10000,
+    });
+    const plotId = res.data?.data?.plot_id;
+    logCadastreApiRequest("GET", path, params, { plot_id: plotId ?? null });
+    return plotId && plotId > 0 ? plotId : null;
   },
 };

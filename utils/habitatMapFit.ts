@@ -3,7 +3,7 @@ import { Dimensions } from "react-native";
 import type { HabitatPlan, HabitatPlot, HabitatSector, LatLng } from "../types/habitat";
 import {
   extractPlotPolygons,
-  extractSectorPolygons,
+  safeSectorDisplayPolygons,
   plotLabelCoordinate,
   plotAnchorCoordinate,
   normalizeMauritaniaLatLng,
@@ -26,8 +26,13 @@ function isValidLatLng(c: LatLng | null | undefined): boolean {
   );
 }
 
-/** Quartier view: show whole neighborhood without over-zooming parcels. */
-const SECTOR_PARCEL_ZOOM = { minDelta: 0.02, maxDelta: 0.07 };
+/**
+ * Quartier view: close enough to guarantee zoom >= MIN_SECTOR_VIEWPORT_ZOOM
+ * (14, see habitatSectorViewportGeometry.ts) so plot geometry starts loading
+ * immediately on quartier select — never wait for the user to manually zoom
+ * in. maxDelta 0.022 ≈ zoom 14, minDelta 0.012 ≈ zoom 15.
+ */
+const SECTOR_PARCEL_ZOOM = { minDelta: 0.012, maxDelta: 0.022 };
 
 /** Full-sector camera: entire quartier visible with margin. */
 const SECTOR_FULL_VIEW_ZOOM = { minDelta: 0.03, maxDelta: 0.1 };
@@ -57,7 +62,7 @@ export function regionForHabitatSector(
   const parcel = opts?.parcelLevel === true;
   const zoomOpts = parcel ? SECTOR_PARCEL_ZOOM : { minDelta: 0.025, maxDelta: 0.1 };
 
-  let coords = extractSectorPolygons(sector).flat().filter(isValidLatLng);
+  let coords = safeSectorDisplayPolygons(sector).flat().filter(isValidLatLng);
   // Never zoom to whole district when targeting a quartier — that hides the sector.
   if (!coords.length && !parcel && plan) {
     coords = resolvePlanBoundaryRings(plan, districtFallback).flat().filter(isValidLatLng);
@@ -96,7 +101,9 @@ export function regionForHabitatSector(
 /** Fit map to plot centroids when sector has no boundary polygon. */
 export function regionForPlotCentroids(plots: HabitatPlot[]): Region | null {
   const coords: LatLng[] = [];
-  for (const p of plots) {
+  const stride = plots.length > 500 ? Math.ceil(plots.length / 500) : 1;
+  for (let i = 0; i < plots.length; i += stride) {
+    const p = plots[i]!;
     const normalized = normalizeMauritaniaLatLng(p.centroid_lat, p.centroid_lng);
     if (normalized && isValidLatLng(normalized)) {
       coords.push(normalized);
@@ -123,7 +130,7 @@ export function regionForSectorAndPlots(
   districtFallback: DistrictFallback[] = [],
 ): Region {
   const coords: LatLng[] = [];
-  for (const c of extractSectorPolygons(sector).flat()) {
+  for (const c of safeSectorDisplayPolygons(sector).flat()) {
     if (isValidLatLng(c)) coords.push(c);
   }
   for (const c of collectPlotMapCoordinates(plots, 1200)) {
@@ -288,15 +295,29 @@ export async function animateHabitatMapToRegionWithRetry(
   maxWaitMs = 1200,
 ): Promise<boolean> {
   const started = Date.now();
+  let sawMapRef = false;
   while (Date.now() - started < maxWaitMs) {
     const map = resolveMapInstance(mapRef);
+    if (map) sawMapRef = true;
     if (map?.animateToRegion) {
       map.animateToRegion(region, duration);
+      console.log("[HabitatCadastre] [Camera] animateToRegion called", {
+        waited_ms: Date.now() - started,
+        region: {
+          lat: Number(region.latitude.toFixed(5)),
+          lng: Number(region.longitude.toFixed(5)),
+          latDelta: Number(region.latitudeDelta.toFixed(5)),
+        },
+      });
       await new Promise((resolve) => setTimeout(resolve, duration + 24));
       return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 48));
   }
+  console.warn("[HabitatCadastre] [Camera] animateToRegion NEVER FIRED — camera stayed put", {
+    waited_ms: Date.now() - started,
+    saw_map_ref_but_no_animate_method: sawMapRef,
+  });
   return false;
 }
 
@@ -309,7 +330,14 @@ export async function flyMapToQuartier(
   districtFallback: DistrictFallback[] = [],
   duration = HABITAT_MAP_FLY_MS,
 ): Promise<Region> {
-  let target = regionForHabitatSector(sector, plan, districtFallback);
+  // parcelLevel: true — large quartiers (>500 plots) pass an empty plots[]
+  // here (see useHabitatCadastre.ts applyCadastreFilter) and would otherwise
+  // fall back to fitting the *entire* sector boundary, which for a big
+  // quartier zooms out to ~12 — below the zoom-14 floor plot geometry needs
+  // to start loading. Always start close instead; panning covers the rest.
+  let target = regionForHabitatSector(sector, plan, districtFallback, {
+    parcelLevel: true,
+  });
   if (plots.length > 0) {
     const fromPlots =
       regionForSectorAndPlots(sector, plan, plots, districtFallback) ??
@@ -332,7 +360,7 @@ export function fitMapToHabitatPlots(
 
   const fitCoords: LatLng[] = [];
   if (sector) {
-    for (const c of extractSectorPolygons(sector).flat()) {
+    for (const c of safeSectorDisplayPolygons(sector).flat()) {
       if (isValidLatLng(c)) fitCoords.push(c);
     }
   }

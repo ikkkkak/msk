@@ -1,6 +1,7 @@
 /**
  * Shared cadastre map stack for Sell, Rent, and Land tabs on SearchScreen.
- * iOS: Apple Maps via getMapProvider() in HabitatCadastreMap (Android: Google).
+ * iOS: Apple Maps via getMapProvider() in HabitatCadastreMap.
+ * Android: MapTiler tiles via PlatformMapTileLayer in HabitatCadastreMap.
  * Filter sheet is hoisted on SearchScreen — this view only renders map + chips.
  */
 import {
@@ -22,6 +23,7 @@ import { localizedHabitatName } from "./cadastreFilterUtils";
 import type { HabitatPlot } from "../../types/habitat";
 import type { useHabitatCadastre } from "../../hooks/useHabitatCadastre";
 import type { CadastreMapHandle } from "../../utils/habitatCadastreMapRef";
+import type { MapLandmarkRecord } from "../../utils/landmarkMapMarkers";
 
 type DistrictFallback = {
   name: string;
@@ -34,8 +36,8 @@ type Props = {
   mapRef: RefObject<CadastreMapHandle | null>;
   cadastre: CadastreApi;
   districtFallback: DistrictFallback[];
-  mapType: "standard" | "satellite";
-  onMapTypeChange?: (type: "standard" | "satellite") => void;
+  mapType: "standard" | "satellite" | "sentinel";
+  onMapTypeChange?: (type: "standard" | "satellite" | "sentinel") => void;
   initialRegion?: Region;
   onPlotPress: (plot: HabitatPlot) => void;
   onMapBackgroundPress?: () => void;
@@ -43,6 +45,7 @@ type Props = {
   onPlotFound?: (plot: HabitatPlot) => void;
   onOpenZones: () => void;
   onOpenQuartiers: () => void;
+  onOpenSubSectors?: () => void;
   plotNumberValue: string;
   onPlotNumberChange: (value: string) => void;
   onPlotSearch: () => void;
@@ -50,6 +53,15 @@ type Props = {
   onClearFilter: () => void;
   onPlotViewAllDetails?: (plot: HabitatPlot) => void;
   onBackToList?: () => void;
+  landsForSale?: MapLandmarkRecord[];
+  selectedLand?: MapLandmarkRecord | null;
+  onLandPress?: (landmark: MapLandmarkRecord) => void;
+  onLandClusterPress?: (cluster: import("../../utils/landmarkMapClustering").LandMapCluster) => void;
+  onLandClose?: () => void;
+  onLandViewDetails?: (landmark: MapLandmarkRecord) => void;
+  showLandPanel?: boolean;
+  landPinRestoreGeneration?: number;
+  landPanelDismissRef?: React.MutableRefObject<(() => void) | null>;
 };
 
 export function SearchCadastreMapView({
@@ -65,6 +77,7 @@ export function SearchCadastreMapView({
   onPlotFound,
   onOpenZones,
   onOpenQuartiers,
+  onOpenSubSectors,
   plotNumberValue,
   onPlotNumberChange,
   onPlotSearch,
@@ -72,6 +85,15 @@ export function SearchCadastreMapView({
   onClearFilter,
   onPlotViewAllDetails,
   onBackToList,
+  landsForSale = [],
+  selectedLand = null,
+  onLandPress,
+  onLandClusterPress,
+  onLandClose,
+  onLandViewDetails,
+  showLandPanel = false,
+  landPinRestoreGeneration = 0,
+  landPanelDismissRef,
 }: Props) {
   const { t, i18n } = useTranslation();
   const isRtl =
@@ -90,11 +112,22 @@ export function SearchCadastreMapView({
     selectedPlan?.name,
     selectedPlan?.name_ar,
   );
-  const sectorLabel = localizedHabitatName(
+  const baseSectorLabel = localizedHabitatName(
     isRtl,
     selectedSector?.name,
     selectedSector?.name_ar,
   );
+  const subSectorLabel = cadastre.pinnedSubSector
+    ? localizedHabitatName(
+        isRtl,
+        cadastre.pinnedSubSector.name,
+        cadastre.pinnedSubSector.name_ar,
+      )
+    : null;
+  const sectorLabel =
+    subSectorLabel && baseSectorLabel
+      ? `${baseSectorLabel} · ${subSectorLabel}`
+      : subSectorLabel || baseSectorLabel;
   const zoneSelected = cadastre.selectedPlanId != null;
   const sectorSelected = cadastre.selectedSectorId != null;
 
@@ -114,12 +147,21 @@ export function SearchCadastreMapView({
         selectedPlanId={cadastre.selectedPlanId}
         selectedSectorId={cadastre.selectedSectorId}
         selectedPlotId={cadastre.selectedPlot?.id ?? null}
+        subSectors={cadastre.subSectors}
+        selectedSubSectorId={cadastre.selectedSubSectorId}
+        onSubSectorPress={(subSectorId) =>
+          cadastre.selectSubSector(subSectorId, mapRef)
+        }
         plotsTruncated={cadastre.plotsTruncated}
         plotsLoadedCount={cadastre.plotsLoadedCount}
         plotsDrawnCount={cadastre.plotsDrawnCount}
         sectorPlotTotal={cadastre.sectorPlotTotal}
+        plotsGeometryReady={cadastre.plotsGeometryReady}
+        plotsRevealReady={cadastre.plotsRevealReady}
+        plotsViewportCapped={cadastre.plotsViewportCapped}
         districtFallback={districtFallback}
         plansLoading={cadastre.plansLoading}
+        sectorsLoading={cadastre.sectorsLoading}
         plansError={cadastre.plansError}
         loadingPlots={cadastre.loadingPlots}
         mapNavigating={cadastre.mapNavigating}
@@ -127,6 +169,9 @@ export function SearchCadastreMapView({
         onRegionChangeComplete={cadastre.onRegionChangeComplete}
         onPlanPress={(planId) =>
           void cadastre.selectPlan(planId, mapRef, districtFallback)
+        }
+        onSectorPress={(sectorId) =>
+          void cadastre.selectSector(sectorId, mapRef, districtFallback)
         }
         onPlotPress={onPlotPress}
         onMapBackgroundPress={onMapBackgroundPress}
@@ -136,10 +181,19 @@ export function SearchCadastreMapView({
         onPlotClose={() => cadastre.setSelectedPlot(null)}
         onPlotViewAllDetails={onPlotViewAllDetails}
         selectedPlot={cadastre.selectedPlot}
+        landsForSale={landsForSale}
+        selectedLand={selectedLand}
+        onLandPress={onLandPress}
+        onLandClusterPress={onLandClusterPress}
+        onLandClose={onLandClose}
+        onLandViewDetails={onLandViewDetails}
+        showLandPanel={showLandPanel}
+        landPinRestoreGeneration={landPinRestoreGeneration}
+        landPanelDismissRef={landPanelDismissRef}
       />
 
       <View style={styles.topChrome} pointerEvents="box-none">
-        {onBackToList && !showPlotPanel ? (
+        {onBackToList && !showPlotPanel && !showLandPanel ? (
           <Pressable
             style={({ pressed }) => [
               styles.backBtn,
@@ -172,7 +226,7 @@ export function SearchCadastreMapView({
           selectedSectorLabel={sectorLabel}
           zoneSelected={zoneSelected}
           sectorSelected={sectorSelected}
-          compact={showPlotPanel}
+          compact={showPlotPanel || showLandPanel}
           onOpenZone={onOpenZones}
           onOpenSector={onOpenQuartiers}
           plotNumberValue={plotNumberValue}
@@ -180,6 +234,11 @@ export function SearchCadastreMapView({
           onPlotSearch={onPlotSearch}
           plotSearching={plotSearching}
           onClear={onClearFilter}
+          subSectorAvailable={
+            sectorSelected && cadastre.subSectors.length > 0
+          }
+          selectedSubSectorLabel={subSectorLabel ?? undefined}
+          onOpenSubSector={onOpenSubSectors}
           embedded
         />
       </View>

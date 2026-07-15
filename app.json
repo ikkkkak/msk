@@ -2,7 +2,7 @@
   "expo": {
     "name": "Meskeny - مسكني",
     "slug": "habitat",
-    "version": "1.4.53",
+    "version": "1.4.54",
     "orientation": "portrait",
     "icon": "./assets/logo.png",
     "scheme": "com.jeremypersing.apartmentsclone",
@@ -31,9 +31,7 @@
       "_comment": "0 = never wait for an OTA update on launch. App opens instantly from cache.",
       "fallbackToCacheTimeout": 0
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.jeremypersing.apartmentsclone",
@@ -57,10 +55,7 @@
         },
         "UILaunchStoryboardName": "SplashScreen",
         "_comment_backgroundModes": "Required for socket keepalive and background uploads.",
-        "UIBackgroundModes": [
-          "fetch",
-          "remote-notification"
-        ],
+        "UIBackgroundModes": ["fetch", "remote-notification"],
         "CADisableMinimumFrameDurationOnPhone": true
       }
     },

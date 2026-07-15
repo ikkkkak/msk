@@ -25,7 +25,7 @@ const fullUrl = fetchUrl.startsWith("http")
 const response = await fetch(fullUrl, { signal: controller.signal });
 ```
 
-**Impact**: Now correctly fetches from `http://192.168.100.44:4000/property-sales/public`
+**Impact**: Now correctly fetches from `https://api.meskeny.com/property-sales/public`
 
 ### 2. **Infinite Loop in useEffect**
 
@@ -87,7 +87,7 @@ console.log("❌ Fetch error:", message);
 1. ✅ Component mounts with default `fetchUrl="/property-sales/public"`
 2. ✅ Checks cache - if found, shows data immediately
 3. ✅ If no cache, shows skeleton while fetching
-4. ✅ Fetches from `http://192.168.100.44:4000/property-sales/public`
+4. ✅ Fetches from `https://api.meskeny.com/property-sales/public`
 5. ✅ Displays properties once loaded
 6. ✅ Pull-to-refresh works without loops
 

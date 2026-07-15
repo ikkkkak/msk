@@ -4,6 +4,7 @@ import { View, Text, StyleSheet, Pressable } from "react-native";
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  onError?: (error: Error) => void;
 }
 
 interface State {
@@ -22,6 +23,7 @@ export class MapErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    this.props.onError?.(error);
     console.error("====================================");
     console.error("MAP RENDERING CRASH DETECTED!");
     console.error("Error Message:", error.message);

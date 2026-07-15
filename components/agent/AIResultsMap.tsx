@@ -1,6 +1,9 @@
 import React, { useMemo } from "react";
 import { View, StyleSheet } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker } from "react-native-maps";
+import { getMapProvider } from "../../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../map/PlatformMapTileLayer";
 import Animated, { FadeIn } from "react-native-reanimated";
 import type { PropertyRecommendation } from "../../services/aiService";
 
@@ -47,14 +50,16 @@ export function AIResultsMap({ items }: Props) {
   return (
     <Animated.View entering={FadeIn.duration(400)} style={styles.wrap}>
       <MapView
-        provider={PROVIDER_GOOGLE}
+        provider={getMapProvider()}
         style={styles.map}
+        mapType={getPlatformMapViewConfig("standard").mapType}
         initialRegion={region}
         scrollEnabled
         zoomEnabled
         rotateEnabled={false}
         pitchEnabled={false}
       >
+        <PlatformMapTileLayer mapStyle="standard" />
         {coords.map((p) => (
           <Marker
             key={`m-${p.id}`}

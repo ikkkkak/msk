@@ -31,6 +31,8 @@ import { useNavigation } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import MapView, { Region, Polygon, Polyline, Marker } from "react-native-maps";
 import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "./map/PlatformMapTileLayer";
 import * as Haptics from "expo-haptics";
 import Animated, {
   useSharedValue,
@@ -670,6 +672,11 @@ export const BaseMap = memo<BaseMapProps>(
       }
     }, [dataType, zoomNoticeText, t]);
 
+    const platformMapConfig = useMemo(
+      () => getPlatformMapViewConfig(mapType),
+      [mapType],
+    );
+
     // ============================================================================
     // RENDER
     // ============================================================================
@@ -680,7 +687,7 @@ export const BaseMap = memo<BaseMapProps>(
           ref={mapRef}
           style={[styles.map, style]}
           provider={getMapProvider()}
-          mapType={mapType}
+          mapType={platformMapConfig.mapType}
           initialRegion={initialRegionRef.current}
           onPress={handleMapPress}
           onRegionChange={handleRegionChange}
@@ -706,6 +713,7 @@ export const BaseMap = memo<BaseMapProps>(
           zoomTapEnabled
           zoomControlEnabled={false}
         >
+          <PlatformMapTileLayer mapStyle={mapType} />
           {/* Habitat cadastre (plans / sectors) — below listing markers */}
           {habitatCadastre != null &&
             habitatCadastre.enabled !== false &&
@@ -856,7 +864,10 @@ export const BaseMap = memo<BaseMapProps>(
             mapRef={mapRef}
             region={currentRegion}
             mapType={mapType}
-            onMapTypeChange={setMapType}
+            onMapTypeChange={(type) =>
+              setMapType(type === "standard" ? "standard" : "satellite")
+            }
+            mapTypeCycle={["standard", "satellite"]}
             topOffset={52}
             showLayers={(districtBoundaries?.length ?? 0) > 0}
             layersActive={zonesVisible}

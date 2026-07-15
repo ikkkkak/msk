@@ -1,12 +1,20 @@
 /**
- * Habitat cadastre — fetch ALL quartier plots once; draw ALL on map when quartier is pinned.
+ * Habitat cadastre — two-layer rendering:
+ * Layer 1: lite plot metadata for entire quartier (no geometry)
+ * Layer 2: viewport bbox geometry + progressive GPU/native draw (max ~400 polygons)
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { InteractionManager } from "react-native";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { Region } from "react-native-maps";
 import { habitatApi } from "../services/habitatApi";
-import type { HabitatPlot, HabitatPlan, HabitatSector } from "../types/habitat";
+import type {
+  HabitatPlot,
+  HabitatPlan,
+  HabitatSector,
+  HabitatSubSector,
+  HabitatMapViewLevel,
+} from "../types/habitat";
 import {
   bboxFromRegion,
   cadastreMapTier,
@@ -39,21 +47,25 @@ import {
   clearPlotGeometryCache,
   hasStoredPlotGeometry,
   ingestPlotGeometryBatch,
-  isPlotGeometryCached,
   enrichPlotFromGeometryCache,
 } from "../utils/habitatPlotGeometryCache";
 import {
   MAX_PLOTS_DRAWN,
   MAX_PLOT_NUMBER_LABELS,
-  MAX_SECTOR_PLOTS_FETCH,
 } from "../utils/habitatMapLimits";
 import {
   capPlotShapesForSector,
   mergePlotIntoList,
-  selectPlotsForSectorDraw,
+  selectPlotsToDraw,
 } from "../utils/habitatViewportPlots";
 import { CadastrePerfTrace } from "../utils/habitatCadastrePerf";
-import { canUseHabitatVectorTiles } from "../utils/habitatVectorTiles";
+import { isPlotRenderingHandledExternally } from "../utils/habitatCadastreRenderer";
+import { MAX_NATIVE_MAP_CHILDREN_SECTOR } from "../utils/habitatMapLimits";
+import {
+  fetchSectorViewportGeometry,
+  scheduleProgressiveReveal,
+  MIN_SECTOR_VIEWPORT_ZOOM,
+} from "../utils/habitatSectorViewportGeometry";
 
 import {
   CADASTRE_LOG,
@@ -138,6 +150,7 @@ function logCadastreSelection(payload: {
 /** Stable fallbacks — `data ?? []` creates a new array every render and retriggers effects. */
 const EMPTY_PLANS: HabitatPlan[] = [];
 const EMPTY_SECTORS: HabitatSector[] = [];
+const EMPTY_SUB_SECTORS: HabitatSubSector[] = [];
 
 const NOUAKCHOTT_REGION: Region = {
   latitude: 18.098,
@@ -170,61 +183,17 @@ async function fetchSectorPlotsCached(
   await queryClient.removeQueries({ queryKey: ["habitatSectorPlots", sectorId] });
   return queryClient.fetchQuery({
     queryKey: ["habitatSectorPlots", sectorId],
-    queryFn: () =>
-      habitatApi.getAllPlotsForSector(sectorId, MAX_SECTOR_PLOTS_FETCH),
+    queryFn: () => habitatApi.getAllPlotsForSector(sectorId),
     staleTime: 0,
     gcTime: SECTOR_PLOTS_STALE_MS,
   });
 }
-
-function countPlotsWithGeometry(plots: HabitatPlot[]): number {
-  let n = 0;
-  for (const p of plots) {
-    if (p.id != null && isPlotGeometryCached(p.id)) {
-      n += 1;
-      continue;
-    }
-    if (getPlotRings(p).length > 0) n += 1;
-  }
-  return n;
-}
-
-const GEOMETRY_PREFETCH_CHUNK = 120;
 
 function buildSectorPlotShapes(plots: HabitatPlot[]) {
   const shapes = buildPlotShapeDescriptors(plots);
   if (plots.length <= MAX_PLOT_NUMBER_LABELS) return shapes;
   return shapes.map((shape) => ({ ...shape, labelAt: null }));
 }
-
-async function prefetchAllSectorGeometryComplete(
-  plots: HabitatPlot[],
-  gen: number,
-  isActive: () => boolean,
-  onBatch: () => void,
-): Promise<void> {
-  const ids = plots
-    .filter((p) => p.id != null && !hasStoredPlotGeometry(p))
-    .map((p) => p.id as number);
-
-  for (let i = 0; i < ids.length; i += GEOMETRY_PREFETCH_CHUNK) {
-    if (!isActive() || gen !== geometryPrefetchGen) return;
-    const chunk = ids.slice(i, i + GEOMETRY_PREFETCH_CHUNK);
-    try {
-      const geoms = await habitatApi.getPlotGeometryBatch(chunk);
-      if (!isActive() || gen !== geometryPrefetchGen) return;
-      if (geoms.length > 0) {
-        ingestPlotGeometryBatch(geoms);
-        onBatch();
-      }
-    } catch (err) {
-      console.warn(CADASTRE_LOG, "geometry prefetch batch failed", err);
-    }
-    await new Promise((r) => setTimeout(r, 8));
-  }
-}
-
-let geometryPrefetchGen = 0;
 
 async function resolveSector(
   sectorId: number,
@@ -320,6 +289,10 @@ export async function showcaseCadastreOnMapOpen(
   mapRef: MapRef,
   districtFallback: DistrictFallback[] = []
 ): Promise<void> {
+  // TEMPORARY DIAGNOSTIC — crash bisection, revert once sector 123 crash is
+  // root-caused. Disables auto-opening sector 123 so a different quartier
+  // can be picked manually from the filter sheet to test.
+  if (__DEV__) return;
   if (cadastre.selectedPlanId != null) return;
 
   const run = async (): Promise<boolean> => {
@@ -359,6 +332,8 @@ export function useHabitatCadastre() {
   const debouncedRegion = useDebouncedValue(region, VIEWPORT_DEBOUNCE_MS);
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [selectedSectorId, setSelectedSectorId] = useState<number | null>(null);
+  const [selectedSubSectorId, setSelectedSubSectorId] = useState<number | null>(null);
+  const [pinnedSubSector, setPinnedSubSector] = useState<HabitatSubSector | null>(null);
   const [selectedPlot, setSelectedPlot] = useState<HabitatPlot | null>(null);
   const [sectorPlots, setSectorPlots] = useState<HabitatPlot[]>([]);
   const [viewportPlots, setViewportPlots] = useState<HabitatPlot[]>([]);
@@ -368,13 +343,21 @@ export function useHabitatCadastre() {
   const [plotsTruncated, setPlotsTruncated] = useState(false);
   const [sectorPlotTotal, setSectorPlotTotal] = useState(0);
   const [plotGeometryRevision, setPlotGeometryRevision] = useState(0);
+  const [plotsGeometryReady, setPlotsGeometryReady] = useState(false);
+  const [sectorMetadataReady, setSectorMetadataReady] = useState(false);
+  const [revealedPlotShapeCount, setRevealedPlotShapeCount] = useState(0);
+  const [loadingViewportGeometry, setLoadingViewportGeometry] = useState(false);
 
   const viewportGen = useRef(0);
   const applyGen = useRef(0);
   const plotViewportGen = useRef(0);
+  const sectorViewportGen = useRef(0);
   const plotBboxAbort = useRef<AbortController | null>(null);
   const lastPlotFetchRegion = useRef<Region | null>(null);
+  /** Sector id whose progressive reveal already ran once (legacy fallback only). */
+  const revealedSectorRef = useRef<number | null>(null);
   const lastPlotViewportHash = useRef("");
+  const lastSectorViewportHash = useRef("");
 
   const zoom = zoomFromRegion(debouncedRegion.longitudeDelta);
   const viewLevel = viewLevelFromZoom(zoom);
@@ -399,15 +382,32 @@ export function useHabitatCadastre() {
   const sectors = filterSectorsQuery.data ?? EMPTY_SECTORS;
   const sectorsLoading = filterSectorsQuery.isLoading;
 
-  /** Sectors passed to map layers — pinned quartier only (no browse labels). */
+  /**
+   * Sub-sectors ("Ilot" subdivisions) for the pinned quartier — only some
+   * sectors have any (see habitat_sub_sectors backend note); when a sector
+   * has none, effectiveViewLevel below falls straight through to plots.
+   */
+  const subSectorsQuery = useQuery({
+    queryKey: ["habitatSubSectors", selectedSectorId],
+    queryFn: () => habitatApi.getSubSectors(selectedSectorId!),
+    staleTime: 30 * 60 * 1000,
+    enabled: selectedSectorId != null,
+  });
+  const subSectors = subSectorsQuery.data ?? EMPTY_SUB_SECTORS;
+  const subSectorsLoading = subSectorsQuery.isLoading;
+
+  /** Sectors for map layers — pinned quartier, or zone quartier outlines when zone only. */
   const mapSectors = useMemo(() => {
     if (pinnedSector) return [pinnedSector];
     if (selectedSectorId != null) {
       const fromFilter = sectors.find((s) => s.id === selectedSectorId);
       return fromFilter ? [fromFilter] : [];
     }
+    if (selectedPlanId != null) {
+      return sectors.filter((s) => s.plan_id === selectedPlanId);
+    }
     return [];
-  }, [pinnedSector, selectedSectorId, sectors]);
+  }, [pinnedSector, selectedSectorId, selectedPlanId, sectors]);
 
   const mapTier = cadastreMapTier(zoom);
 
@@ -539,6 +539,76 @@ export function useHabitatCadastre() {
     };
   }, [debouncedRegion, selectedPlanId, selectedSectorId]);
 
+  /**
+   * Pinned quartier — Layer 2: fetch geometry for visible bbox only (never entire quartier).
+   */
+  useEffect(() => {
+    if (selectedSectorId == null || !sectorMetadataReady) return;
+    if (isPlotRenderingHandledExternally()) return;
+
+    const z = zoomFromRegion(debouncedRegion.longitudeDelta);
+    if (z < MIN_SECTOR_VIEWPORT_ZOOM) {
+      setPlotsGeometryReady(false);
+      setRevealedPlotShapeCount(0);
+      return;
+    }
+
+    if (!regionMovedEnough(lastPlotFetchRegion.current, debouncedRegion)) {
+      return;
+    }
+
+    const plotHash = computeViewportHash(debouncedRegion);
+    if (plotHash === lastSectorViewportHash.current) {
+      return;
+    }
+
+    const gen = ++sectorViewportGen.current;
+    setLoadingViewportGeometry(true);
+
+    devLog(CADASTRE_LOG, "[Sector viewport] bbox geometry fetch", {
+      sectorId: selectedSectorId,
+      zoom: z,
+    });
+
+    void fetchSectorViewportGeometry({
+      sectorId: selectedSectorId,
+      planId: selectedPlanId,
+      region: debouncedRegion,
+      metadata: sectorPlots,
+      maxPlots: MAX_NATIVE_MAP_CHILDREN_SECTOR,
+    })
+      .then((result) => {
+        if (gen !== sectorViewportGen.current) return;
+
+        lastPlotFetchRegion.current = debouncedRegion;
+        lastSectorViewportHash.current = plotHash;
+        setPlotGeometryRevision((n) => n + 1);
+        setPlotsGeometryReady(true);
+
+        devLog(CADASTRE_LOG, "[Sector viewport] geometry ready", {
+          bboxPlots: result.bboxPlots,
+          batchPlots: result.batchPlots,
+          drawable: result.drawableCount,
+        });
+      })
+      .catch((err) => {
+        if (gen !== sectorViewportGen.current) return;
+        console.warn(CADASTRE_LOG, "[Sector viewport] geometry fetch failed", err);
+        setPlotsGeometryReady(true);
+      })
+      .finally(() => {
+        if (gen === sectorViewportGen.current) {
+          setLoadingViewportGeometry(false);
+        }
+      });
+  }, [
+    debouncedRegion,
+    selectedSectorId,
+    selectedPlanId,
+    sectorMetadataReady,
+    sectorPlots,
+  ]);
+
   const onRegionChange = useCallback(() => {
     /* Intentionally no setState — avoids re-rendering map layers every pan frame. */
   }, []);
@@ -567,14 +637,21 @@ export function useHabitatCadastre() {
       plotBboxAbort.current?.abort();
       plotBboxAbort.current = null;
       clearPlotGeometryCache();
-      const geomGen = ++geometryPrefetchGen;
+      ++sectorViewportGen.current;
+      lastSectorViewportHash.current = "";
+      lastPlotFetchRegion.current = null;
 
       setSelectedPlanId(planId);
       setSelectedSectorId(sectorId);
+      setSelectedSubSectorId(null);
+      setPinnedSubSector(null);
       setSelectedPlot(null);
       setSectorPlots([]);
+      setSectorMetadataReady(false);
+      setRevealedPlotShapeCount(0);
       setLoadingPlots(true);
       setMapNavigating(true);
+      setPlotsGeometryReady(false);
 
       void habitatApi.getSectorPlotCount(sectorId).then((count) => {
         if (gen === applyGen.current && count > 0) {
@@ -628,10 +705,13 @@ export function useHabitatCadastre() {
       const quartierPerf = new CadastrePerfTrace("quartier_load", "plots_api");
 
       try {
-        const [resolved, plotResult] = await Promise.all([
-          resolveSector(sectorId, planId, mapSectors, plans, queryClient),
-          fetchSectorPlotsCached(sectorId, queryClient),
-        ]);
+        const resolved = await resolveSector(
+          sectorId,
+          planId,
+          mapSectors,
+          plans,
+          queryClient,
+        );
 
         if (!resolved || gen !== applyGen.current) {
           if (!resolved) {
@@ -644,7 +724,6 @@ export function useHabitatCadastre() {
         setPinnedSector(sector);
         const plan = plans.find((p) => p.id === pid) ?? planHint;
 
-        // Fly even when sector wasn't in the local cache (filter sheet draft list).
         if (!sectorHint && !skipCamera) {
           const resolvedTarget = regionForHabitatSector(
             sector,
@@ -659,181 +738,160 @@ export function useHabitatCadastre() {
           );
         }
 
-        const { plots, total, truncated, fetchPath } = plotResult;
+        // Unblock map — show quartier boundary immediately (like zone select).
+        if (gen === applyGen.current) {
+          setLoadingPlots(false);
+          setMapNavigating(false);
+        }
+
+        const plotResult = await fetchSectorPlotsCached(sectorId, queryClient);
         if (gen !== applyGen.current) return;
+
+        const { plots, total, truncated, fetchPath } = plotResult;
         quartierPerf.mark("decode");
 
         if (plots.length < total) {
-          console.warn(CADASTRE_LOG, "quartier fetch incomplete — retrying pages", {
+          console.warn(CADASTRE_LOG, "quartier fetch incomplete", {
             sectorId,
             loaded: plots.length,
             total,
           });
         }
 
-        // Second camera slide once plot centroids are known (before geometry prefetch).
-        let target: Region | null = null;
-        if (!skipCamera) {
-          target = await flyMapToQuartier(
-            mapRef,
-            sector,
-            plan,
-            plots,
-            districtFallback,
-            HABITAT_MAP_FLY_MS,
-          );
-          setRegion(target);
-        }
-        quartierPerf.mark("camera");
-
         await new Promise<void>((resolve) => {
-          InteractionManager.runAfterInteractions(() => {
-            if (gen !== applyGen.current) {
-              resolve();
-              return;
-            }
-            setSectorPlots(plots);
-            resolve();
-          });
+          InteractionManager.runAfterInteractions(() => resolve());
         });
         if (gen !== applyGen.current) return;
 
+        setSectorPlots(plots);
         setSectorPlotTotal(total);
         setPlotsTruncated(truncated || plots.length < total);
 
         const isActive = () => gen === applyGen.current;
 
-        // Vector tiles: GPU renders parcels — skip bulk GeoJSON geometry prefetch.
-        if (!canUseHabitatVectorTiles()) {
-          void (async () => {
-            const geomPerf = new CadastrePerfTrace(
-              "quartier_geometry_prefetch",
-              "geometry_prefetch",
-            );
-            try {
-              await prefetchAllSectorGeometryComplete(plots, geomGen, isActive, () => {
-                if (isActive()) setPlotGeometryRevision((n) => n + 1);
-              });
-              if (!isActive()) return;
-              setPlotGeometryRevision((n) => n + 1);
-              setSectorPlots((prev) =>
-                prev.map((p) => enrichPlotFromGeometryCache(p)),
-              );
-              if (!skipCamera && resolveMapInstance(mapRef)?.fitToCoordinates) {
-                const refined =
-                  regionForSectorAndPlots(sector, plan, plots, districtFallback) ??
-                  target;
-                if (refined) {
-                  setRegion(refined);
-                  await fitMapToHabitatPlots(
-                    resolveMapInstance(mapRef),
-                    plots,
-                    refined,
-                    sector,
-                    HABITAT_MAP_ADJUST_MS,
-                  );
-                }
-              }
-              geomPerf.finish({
-                sector_id: sectorId,
-                plots: plots.length,
-                with_geometry: countPlotsWithGeometry(plots),
-              });
-            } catch (err) {
-              console.warn(CADASTRE_LOG, "geometry prefetch failed", err);
-              geomPerf.finish({ sector_id: sectorId, error: true });
-            }
-          })();
-        } else if (!skipCamera && target) {
-          void fitMapToHabitatPlots(
-            resolveMapInstance(mapRef),
-            plots,
-            target,
+        if (isPlotRenderingHandledExternally()) {
+          setPlotsGeometryReady(true);
+          setPlotGeometryRevision((n) => n + 1);
+        }
+
+        if (!skipCamera) {
+          const cameraPlots = plots.length > 500 ? [] : plots;
+          const target = await flyMapToQuartier(
+            mapRef,
             sector,
-            HABITAT_MAP_ADJUST_MS,
+            plan,
+            cameraPlots,
+            districtFallback,
+            HABITAT_MAP_FLY_MS,
           );
+          if (!isActive()) return;
+          if (target) {
+            setRegion(target);
+            if (isPlotRenderingHandledExternally()) {
+              void fitMapToHabitatPlots(
+                resolveMapInstance(mapRef),
+                plots,
+                target,
+                sector,
+                HABITAT_MAP_ADJUST_MS,
+              );
+            }
+          }
         }
 
-        const withGeom = canUseHabitatVectorTiles()
-          ? total
-          : countPlotsWithGeometry(plots);
+        // Layer 2: viewport geometry fetch runs after camera + metadata are ready.
+        lastSectorViewportHash.current = "";
+        lastPlotFetchRegion.current = null;
+        setSectorMetadataReady(true);
+        quartierPerf.mark("camera");
 
-        if (gen !== applyGen.current) return;
-
-        const visible = canUseHabitatVectorTiles()
-          ? []
-          : selectPlotsForSectorDraw(plots);
-        const drawn = canUseHabitatVectorTiles()
-          ? total
-          : capPlotShapesForSector(buildSectorPlotShapes(visible)).length;
-        quartierPerf.mark("draw_prep");
-
-        logCadastreQuartierPlotsLoaded({
-          planId: pid,
-          sectorId,
-          sectorName: sector.name_ar || sector.name,
-          plotsInDb: total,
-          plotsLoaded: plots.length,
-          plotsTruncated: truncated || plots.length < total,
-          plotsWithGeometry: withGeom,
-          plotsDrawn: drawn,
-          fetchPath,
-        });
-        logCadastreSelection({
-          event: "quartier selected — all plots loaded",
-          plan: plan ?? null,
-          sector,
-          sectorCountInPlan: sectors.filter((s) => s.plan_id === pid).length,
-          plotsLoaded: plots.length,
-          plotsTotalInDb: total,
-          plotsTruncated: truncated || plots.length < total,
-          plotsWithGeometry: withGeom,
-          viewportPlots: drawn,
-        });
-        logFilterCadastreApply(
-          {
-            id: pid,
-            name: plan?.name_ar || plan?.name || String(pid),
-          },
-          {
-            id: sectorId,
-            name: sector.name_ar || sector.name,
-          },
-          {
-            foundInDb: total,
-            loaded: plots.length,
-            drawnOnMap: drawn,
-            withGeometry: withGeom,
-          },
-        );
-        devLog(
-          `${CADASTRE_LOG} [Filter] >>> ${total} plots in quartier; ${plots.length} loaded; ${withGeom} with geometry; ${drawn} drawn in view`,
-        );
-
-        if (withGeom === 0 && plots.length > 0 && !canUseHabitatVectorTiles()) {
-          console.warn(
-            CADASTRE_LOG,
-            `${plots.length} plots in DB but 0 have geom_geojson/corners — nothing to draw`,
-          );
-        }
-
-        quartierPerf.finish({
-          sector_id: sectorId,
-          plots_loaded: plots.length,
-          plots_drawn: drawn,
-          plots_with_geometry: withGeom,
-          fetch_path: fetchPath,
-          render_mode: canUseHabitatVectorTiles() ? "vector_tiles_gpu" : "react_polygons",
-        });
-
-        if (target) {
-          devLog(CADASTRE_LOG, "map fit to quartier", {
-            center: { lat: target.latitude, lng: target.longitude },
-            delta: {
-              lat: target.latitudeDelta,
-              lng: target.longitudeDelta,
-            },
+        if (isPlotRenderingHandledExternally() && gen === applyGen.current) {
+          const drawn = total;
+          quartierPerf.mark("draw_prep");
+          logCadastreQuartierPlotsLoaded({
+            planId: pid,
+            sectorId,
+            sectorName: sector.name_ar || sector.name,
+            plotsInDb: total,
+            plotsLoaded: plots.length,
+            plotsTruncated: truncated || plots.length < total,
+            plotsWithGeometry: total,
             plotsDrawn: drawn,
+            fetchPath,
+          });
+          logCadastreSelection({
+            event: "quartier selected — GPU vector tiles",
+            plan: plan ?? null,
+            sector,
+            sectorCountInPlan: sectors.filter((s) => s.plan_id === pid).length,
+            plotsLoaded: plots.length,
+            plotsTotalInDb: total,
+            plotsTruncated: truncated || plots.length < total,
+            plotsWithGeometry: total,
+            viewportPlots: drawn,
+          });
+          logFilterCadastreApply(
+            { id: pid, name: plan?.name_ar || plan?.name || String(pid) },
+            { id: sectorId, name: sector.name_ar || sector.name },
+            {
+              foundInDb: total,
+              loaded: plots.length,
+              drawnOnMap: drawn,
+              withGeometry: total,
+            },
+          );
+          quartierPerf.finish({
+            sector_id: sectorId,
+            plots_loaded: plots.length,
+            plots_drawn: drawn,
+            plots_with_geometry: total,
+            fetch_path: fetchPath,
+            render_mode: "vector_tiles_gpu",
+          });
+        } else if (gen === applyGen.current) {
+          logCadastreQuartierPlotsLoaded({
+            planId: pid,
+            sectorId,
+            sectorName: sector.name_ar || sector.name,
+            plotsInDb: total,
+            plotsLoaded: plots.length,
+            plotsTruncated: truncated || plots.length < total,
+            plotsWithGeometry: 0,
+            plotsDrawn: 0,
+            fetchPath,
+          });
+          logCadastreSelection({
+            event: "quartier selected — metadata only, viewport geometry next",
+            plan: plan ?? null,
+            sector,
+            sectorCountInPlan: sectors.filter((s) => s.plan_id === pid).length,
+            plotsLoaded: plots.length,
+            plotsTotalInDb: total,
+            plotsTruncated: truncated || plots.length < total,
+            plotsWithGeometry: 0,
+            viewportPlots: 0,
+          });
+          logFilterCadastreApply(
+            { id: pid, name: plan?.name_ar || plan?.name || String(pid) },
+            { id: sectorId, name: sector.name_ar || sector.name },
+            {
+              foundInDb: total,
+              loaded: plots.length,
+              drawnOnMap: 0,
+              withGeometry: 0,
+            },
+          );
+          devLog(
+            `${CADASTRE_LOG} [Filter] >>> ${total} plots metadata loaded — viewport geometry on map idle`,
+            { sectorId },
+          );
+          quartierPerf.finish({
+            sector_id: sectorId,
+            plots_loaded: plots.length,
+            plots_drawn: 0,
+            plots_with_geometry: 0,
+            fetch_path: fetchPath,
+            render_mode: "viewport_bbox_chunks",
           });
         }
       } catch (err) {
@@ -844,7 +902,11 @@ export function useHabitatCadastre() {
         });
         if (gen === applyGen.current) {
           setSectorPlots([]);
+          setSectorPlotTotal(0);
           setPlotsTruncated(false);
+          setSectorMetadataReady(false);
+          setPlotsGeometryReady(false);
+          setRevealedPlotShapeCount(0);
         }
       } finally {
         if (gen === applyGen.current) {
@@ -872,12 +934,19 @@ export function useHabitatCadastre() {
       clearPlotGeometryCache();
       setSelectedPlanId(planId);
       setSelectedSectorId(null);
+      setSelectedSubSectorId(null);
+      setPinnedSubSector(null);
       setSelectedPlot(null);
       setPinnedSector(null);
       setSectorPlots([]);
       setViewportPlots([]);
       setPlotsTruncated(false);
       setSectorPlotTotal(0);
+      setPlotGeometryRevision(0);
+      setSectorMetadataReady(false);
+      setRevealedPlotShapeCount(0);
+      setPlotsGeometryReady(false);
+      lastSectorViewportHash.current = "";
       setMapNavigating(true);
 
       const target = regionForHabitatPlan(plan, districtFallback);
@@ -976,28 +1045,32 @@ export function useHabitatCadastre() {
       mapRef: MapRef,
       districtFallback: DistrictFallback[] = []
     ) => {
-      const pid =
-        selectedPlanId ??
-        sectors.find((s) => s.id === sectorId)?.plan_id ??
-        mapSectors.find((s) => s.id === sectorId)?.plan_id;
-      if (pid == null) {
-        const resolved = await resolveSector(
-          sectorId,
-          null,
-          mapSectors,
-          plans,
-          queryClient,
-        );
-        if (!resolved) return;
-        await applyCadastreFilter(
-          resolved.planId,
-          sectorId,
-          mapRef,
-          districtFallback,
-        );
-        return;
+      try {
+        const pid =
+          selectedPlanId ??
+          sectors.find((s) => s.id === sectorId)?.plan_id ??
+          mapSectors.find((s) => s.id === sectorId)?.plan_id;
+        if (pid == null) {
+          const resolved = await resolveSector(
+            sectorId,
+            null,
+            mapSectors,
+            plans,
+            queryClient,
+          );
+          if (!resolved) return;
+          await applyCadastreFilter(
+            resolved.planId,
+            sectorId,
+            mapRef,
+            districtFallback,
+          );
+          return;
+        }
+        await applyCadastreFilter(pid, sectorId, mapRef, districtFallback);
+      } catch (err) {
+        console.error(CADASTRE_LOG, "selectSector failed", { sectorId, err });
       }
-      await applyCadastreFilter(pid, sectorId, mapRef, districtFallback);
     },
     [
       applyCadastreFilter,
@@ -1009,12 +1082,74 @@ export function useHabitatCadastre() {
     ],
   );
 
+  /**
+   * Sub-sector plots are a client-side filter of the already-fully-loaded
+   * sectorPlots (Layer 1 metadata for the whole pinned quartier) — no extra
+   * fetch needed. Sub-sectors have no polygon boundary of their own (only a
+   * centroid), so selecting one only reframes the camera onto its plots;
+   * the raster/GPU tile layer still draws the whole sector as before.
+   */
+  const selectSubSector = useCallback(
+    (subSectorId: number, mapRef: MapRef) => {
+      const subSector = subSectors.find((s) => s.id === subSectorId) ?? null;
+      setSelectedSubSectorId(subSectorId);
+      setPinnedSubSector(subSector);
+      setSelectedPlot(null);
+
+      const plotsInSubSector = sectorPlots.filter(
+        (p) => p.sub_sector_id === subSectorId,
+      );
+      const fitTarget = regionForPlotCentroids(plotsInSubSector);
+      const target =
+        fitTarget ??
+        (subSector?.centroid_lat != null && subSector?.centroid_lng != null
+          ? {
+              latitude: subSector.centroid_lat,
+              longitude: subSector.centroid_lng,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            }
+          : null);
+      if (target) {
+        setRegion(target);
+        void animateHabitatMapToRegionWithRetry(
+          mapRef,
+          target,
+          HABITAT_MAP_ADJUST_MS,
+        );
+      }
+      devLog(CADASTRE_LOG, "sub-sector selected", {
+        subSectorId,
+        name: subSector?.name,
+        plotsInSubSector: plotsInSubSector.length,
+      });
+    },
+    [subSectors, sectorPlots],
+  );
+
+  const clearSubSectorSelection = useCallback(
+    (mapRef?: MapRef) => {
+      setSelectedSubSectorId(null);
+      setPinnedSubSector(null);
+      if (mapRef && pinnedSector) {
+        const plan = plans.find((p) => p.id === pinnedSector.plan_id);
+        const target = regionForHabitatSector(pinnedSector, plan, []);
+        setRegion(target);
+        void animateHabitatMapToRegionWithRetry(
+          mapRef,
+          target,
+          HABITAT_MAP_ADJUST_MS,
+        );
+      }
+    },
+    [pinnedSector, plans],
+  );
+
   const prefetchSectorPlots = useCallback(
     (sectorId: number) => {
       void queryClient.prefetchQuery({
         queryKey: ["habitatSectorPlots", sectorId],
-        queryFn: () =>
-          habitatApi.getAllPlotsForSector(sectorId, MAX_SECTOR_PLOTS_FETCH),
+        queryFn: () => habitatApi.getAllPlotsForSector(sectorId),
         staleTime: 0,
         gcTime: SECTOR_PLOTS_STALE_MS,
       });
@@ -1026,10 +1161,12 @@ export function useHabitatCadastre() {
     ++applyGen.current;
     ++viewportGen.current;
     ++plotViewportGen.current;
-    ++geometryPrefetchGen;
+    ++sectorViewportGen.current;
     clearPlotGeometryCache();
     setSelectedPlanId(null);
     setSelectedSectorId(null);
+    setSelectedSubSectorId(null);
+    setPinnedSubSector(null);
     setSelectedPlot(null);
     setPinnedSector(null);
     setSectorPlots([]);
@@ -1037,6 +1174,10 @@ export function useHabitatCadastre() {
     setPlotsTruncated(false);
     setSectorPlotTotal(0);
     setPlotGeometryRevision(0);
+    setSectorMetadataReady(false);
+    setRevealedPlotShapeCount(0);
+    setPlotsGeometryReady(false);
+    lastSectorViewportHash.current = "";
     setLoadingPlots(false);
     setMapNavigating(true);
     void animateHabitatMapToRegion(
@@ -1065,7 +1206,7 @@ export function useHabitatCadastre() {
   );
 
   const selectPlot = useCallback(
-    async (plot: HabitatPlot, mapRef?: MapRef | null) => {
+    (plot: HabitatPlot, mapRef?: MapRef | null) => {
       const tapPerf = new CadastrePerfTrace("plot_tap");
       logPlotClickDetails("map data", plot);
 
@@ -1087,92 +1228,90 @@ export function useHabitatCadastre() {
       merged = { ...merged, plan, sector };
 
       const map = mapRef?.current ?? null;
-
-      let detailPlotId = plot.id ?? null;
       const sectorId = plot.sector_id ?? sector?.id;
       const plotNumber = plot.plot_number?.trim();
+      let detailPlotId = plot.id ?? null;
 
-      if (sectorId && plotNumber) {
-        try {
-          const { plot: authoritative, meta } =
-            await habitatApi.lookupPlotInSector(sectorId, plotNumber);
-          tapPerf.mark("lookup");
-          if (authoritative?.id) {
-            if (plot.id != null && authoritative.id !== plot.id) {
-              console.warn(CADASTRE_LOG, "plot id mismatch — using sector lookup", {
-                map_plot_id: plot.id,
-                authoritative_plot_id: authoritative.id,
-                sector_id: sectorId,
-                plot_number: plotNumber,
-                match_kind: meta?.match_kind,
-              });
-            }
-            detailPlotId = authoritative.id;
-            merged = enrichPlotFromGeometryCache({
-              ...merged,
-              ...authoritative,
-              plan: authoritative.plan ?? plan,
-              sector: authoritative.sector ?? sector,
-            });
-          }
-        } catch (err) {
-          tapPerf.mark("lookup");
-          console.warn(CADASTRE_LOG, "sector plot lookup failed", {
-            sectorId,
-            plotNumber,
-            error: err,
-          });
-        }
-      } else {
-        tapPerf.mark("lookup");
-      }
-
-      tapPerf.mark("merge");
-
-      if (detailPlotId) {
-        try {
-          const detail = await habitatApi.getPlot(detailPlotId);
-          tapPerf.mark("metadata");
-          if (detail) {
-            merged = enrichPlotFromGeometryCache({
-              ...merged,
-              ...detail,
-              plan: detail.plan ?? plan,
-              sector: detail.sector ?? sector,
-            });
-            ingestPlotGeometryBatch([merged]);
-            setPlotGeometryRevision((n) => n + 1);
-          }
-        } catch (err) {
-          tapPerf.mark("metadata");
-          console.warn(CADASTRE_LOG, "plot detail fetch failed", {
-            plotId: detailPlotId,
-            error: err,
-          });
-        }
-      } else {
-        tapPerf.mark("metadata");
-      }
-
-      logPlotClickDetails("API detail", merged);
       setSelectedPlot(merged);
       tapPerf.mark("highlight");
+      void focusMapOnSelectedPlot(map, merged, region).catch(() => undefined);
 
-      try {
-        await focusMapOnSelectedPlot(map, merged, region);
-      } catch {
-        // focus is best-effort
-      }
-      tapPerf.mark("focus");
+      void (async () => {
+        if (sectorId && plotNumber) {
+          try {
+            const { plot: authoritative, meta } =
+              await habitatApi.lookupPlotInSector(sectorId, plotNumber);
+            tapPerf.mark("lookup");
+            if (authoritative?.id) {
+              if (plot.id != null && authoritative.id !== plot.id) {
+                console.warn(CADASTRE_LOG, "plot id mismatch — using sector lookup", {
+                  map_plot_id: plot.id,
+                  authoritative_plot_id: authoritative.id,
+                  sector_id: sectorId,
+                  plot_number: plotNumber,
+                  match_kind: meta?.match_kind,
+                });
+              }
+              detailPlotId = authoritative.id;
+              merged = enrichPlotFromGeometryCache({
+                ...merged,
+                ...authoritative,
+                plan: authoritative.plan ?? plan,
+                sector: authoritative.sector ?? sector,
+              });
+            }
+          } catch (err) {
+            tapPerf.mark("lookup");
+            console.warn(CADASTRE_LOG, "sector plot lookup failed", {
+              sectorId,
+              plotNumber,
+              error: err,
+            });
+          }
+        } else {
+          tapPerf.mark("lookup");
+        }
 
-      InteractionManager.runAfterInteractions(() => {
-        tapPerf.mark("popup");
-        tapPerf.finish({
-          plot_id: merged.id,
-          plot_number: merged.plot_number,
-          sector_id: merged.sector_id,
+        tapPerf.mark("merge");
+
+        if (detailPlotId) {
+          try {
+            const detail = await habitatApi.getPlot(detailPlotId);
+            tapPerf.mark("metadata");
+            if (detail) {
+              merged = enrichPlotFromGeometryCache({
+                ...merged,
+                ...detail,
+                plan: detail.plan ?? plan,
+                sector: detail.sector ?? sector,
+              });
+              ingestPlotGeometryBatch([merged]);
+              setPlotGeometryRevision((n) => n + 1);
+              setSelectedPlot(merged);
+            }
+          } catch (err) {
+            tapPerf.mark("metadata");
+            console.warn(CADASTRE_LOG, "plot detail fetch failed", {
+              plotId: detailPlotId,
+              error: err,
+            });
+          }
+        } else {
+          tapPerf.mark("metadata");
+        }
+
+        logPlotClickDetails("API detail", merged);
+        tapPerf.mark("focus");
+
+        InteractionManager.runAfterInteractions(() => {
+          tapPerf.mark("popup");
+          tapPerf.finish({
+            plot_id: merged.id,
+            plot_number: merged.plot_number,
+            sector_id: merged.sector_id,
+          });
         });
-      });
+      })();
     },
     [plans, sectors, mapSectors, region, sectorPlots],
   );
@@ -1198,7 +1337,7 @@ export function useHabitatCadastre() {
         mapRef,
         districtFallback,
       );
-      await selectPlot(plot, mapRef);
+      selectPlot(plot, mapRef);
       return plot;
     },
     [applyCadastreFilter, selectPlot]
@@ -1206,15 +1345,19 @@ export function useHabitatCadastre() {
 
   const plotsSource = useMemo(() => {
     if (selectedSectorId != null) {
-      return sectorPlots.filter(
+      const inSector = sectorPlots.filter(
         (p) => p.sector_id == null || p.sector_id === selectedSectorId,
       );
+      if (selectedSubSectorId != null) {
+        return inSector.filter((p) => p.sub_sector_id === selectedSubSectorId);
+      }
+      return inSector;
     }
     if (viewLevel === "plots" && viewportPlots.length > 0) {
       return viewportPlots;
     }
     return viewportPlots;
-  }, [viewLevel, viewportPlots, selectedSectorId, sectorPlots]);
+  }, [viewLevel, viewportPlots, selectedSectorId, selectedSubSectorId, sectorPlots]);
 
   const plotsToRender = useMemo(() => {
     // Pinned quartier: all data in sectorPlots; map draws via plotShapesToRender only.
@@ -1242,39 +1385,122 @@ export function useHabitatCadastre() {
     return withGeom;
   }, [plotsSource, selectedSectorId, selectedPlot]);
 
-  const plotShapesToRender = useMemo(() => {
-    if (canUseHabitatVectorTiles() && selectedSectorId != null) return [];
-    if (selectedSectorId == null) return undefined;
-    if (sectorPlots.length === 0) return [];
+  const plotShapesFull = useMemo(() => {
+    if (isPlotRenderingHandledExternally() && selectedSectorId != null) return [];
+    if (selectedSectorId == null) return [];
+    if (!plotsGeometryReady || sectorPlots.length === 0) return [];
 
-    const inSector = sectorPlots.filter(
+    let inSector = sectorPlots.filter(
       (p) => p.sector_id == null || p.sector_id === selectedSectorId,
     );
-    let picked = selectPlotsForSectorDraw(inSector);
+    if (selectedSubSectorId != null) {
+      inSector = inSector.filter((p) => p.sub_sector_id === selectedSubSectorId);
+    }
+    const drawable = inSector.filter(
+      (p) => hasStoredPlotGeometry(p) || getPlotRings(p).length > 0,
+    );
+    if (drawable.length === 0) return [];
+
+    let picked = selectPlotsToDraw(
+      drawable,
+      debouncedRegion,
+      MAX_NATIVE_MAP_CHILDREN_SECTOR,
+    );
     if (selectedPlot) {
       picked = mergePlotIntoList(picked, selectedPlot);
     }
     return capPlotShapesForSector(buildSectorPlotShapes(picked));
-  }, [selectedSectorId, sectorPlots, selectedPlot, plotGeometryRevision]);
+  }, [
+    selectedSectorId,
+    selectedSubSectorId,
+    sectorPlots,
+    selectedPlot,
+    plotGeometryRevision,
+    plotsGeometryReady,
+    debouncedRegion,
+  ]);
+
+  useEffect(() => {
+    if (
+      selectedSectorId == null ||
+      isPlotRenderingHandledExternally() ||
+      !plotsGeometryReady
+    ) {
+      setRevealedPlotShapeCount(0);
+      revealedSectorRef.current = null;
+      return;
+    }
+
+    // plotShapesFull depends on debouncedRegion, so it recomputes on every
+    // pan/zoom while a quartier is pinned. Re-running the staged/animated
+    // reveal from scratch on every one of those churns dozens of native
+    // Polygon views in and out at high frequency — a known iOS
+    // react-native-maps crash pattern (native-level, not catchable by JS).
+    // Stage the reveal only once per quartier selection; later viewport
+    // recomputes for the same sector apply directly instead.
+    if (revealedSectorRef.current === selectedSectorId) {
+      setRevealedPlotShapeCount(plotShapesFull.length);
+      return;
+    }
+    revealedSectorRef.current = selectedSectorId;
+    return scheduleProgressiveReveal(
+      plotShapesFull.length,
+      setRevealedPlotShapeCount,
+    );
+  }, [plotShapesFull, plotsGeometryReady, selectedSectorId]);
+
+  const plotShapesToRender = useMemo(() => {
+    if (selectedSectorId == null) return undefined;
+    if (isPlotRenderingHandledExternally()) return [];
+    if (!plotsGeometryReady || plotShapesFull.length === 0) return [];
+    return plotShapesFull.slice(0, revealedPlotShapeCount);
+  }, [
+    selectedSectorId,
+    plotShapesFull,
+    plotsGeometryReady,
+    revealedPlotShapeCount,
+  ]);
 
   const plotsRevealReady =
     selectedSectorId != null
-      ? canUseHabitatVectorTiles()
+      ? isPlotRenderingHandledExternally()
         ? !loadingPlots
-        : sectorPlots.length > 0 && !loadingPlots
+        : plotsGeometryReady && !loadingPlots && !loadingViewportGeometry
       : (plotShapesToRender?.length ?? plotsToRender.length) > 0;
 
   const plotsDrawnCountResolved =
-    canUseHabitatVectorTiles() && selectedSectorId != null
+    isPlotRenderingHandledExternally() && selectedSectorId != null
       ? sectorPlotTotal || sectorPlots.length
-      : plotShapesToRender?.length ?? plotsToRender.length;
+      : plotShapesFull.length > 0
+        ? Math.min(revealedPlotShapeCount, plotShapesFull.length)
+        : plotShapesToRender?.length ?? plotsToRender.length;
 
-  const effectiveViewLevel =
-    selectedSectorId != null
+  const plotsViewportCapped =
+    selectedSectorId != null &&
+    !isPlotRenderingHandledExternally() &&
+    plotsGeometryReady &&
+    sectorPlots.length > 0 &&
+    plotsDrawnCountResolved < (sectorPlotTotal || sectorPlots.length);
+
+  /**
+   * While subSectorsQuery is still loading right after a sector is pinned,
+   * tentatively assume it might have sub-sectors (avoids a "sub_sectors" ->
+   * "plots" -> "sub_sectors" flicker for sectors that do have them) — it
+   * settles to "plots" once the (fast, single-sector) query resolves empty.
+   */
+  const sectorMayHaveSubSectors =
+    subSectors.length > 0 || (subSectorsLoading && selectedSectorId != null);
+
+  const effectiveViewLevel: HabitatMapViewLevel =
+    selectedSubSectorId != null
       ? "plots"
-      : selectedPlanId != null
-        ? "sectors"
-        : viewLevel;
+      : selectedSectorId != null
+        ? sectorMayHaveSubSectors
+          ? "sub_sectors"
+          : "plots"
+        : selectedPlanId != null
+          ? "sectors"
+          : viewLevel;
 
   return {
     initialRegion: NOUAKCHOTT_REGION,
@@ -1293,6 +1519,12 @@ export function useHabitatCadastre() {
     pinnedSector,
     selectedPlanId,
     selectedSectorId,
+    subSectors,
+    subSectorsLoading,
+    selectedSubSectorId,
+    pinnedSubSector,
+    selectSubSector,
+    clearSubSectorSelection,
     selectedPlot,
     setSelectedPlot,
     plotsToRender,
@@ -1302,8 +1534,10 @@ export function useHabitatCadastre() {
     sectorPlotTotal,
     plotsDrawnCount: plotsDrawnCountResolved,
     plotsLoadedCount: plotsSource.length,
-    loadingPlots,
-    loadingViewport: loadingPlots,
+    plotsGeometryReady,
+    plotsViewportCapped,
+    loadingPlots: loadingPlots || loadingViewportGeometry,
+    loadingViewport: loadingPlots || loadingViewportGeometry,
     prefetchSectorPlots,
     applyPlanFilter,
     applyZoneOnly,

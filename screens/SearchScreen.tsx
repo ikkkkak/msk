@@ -41,7 +41,10 @@ import Animated, {
   useDerivedValue,
   useAnimatedScrollHandler,
 } from "react-native-reanimated";
-import MapView, { Polygon, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Polygon } from "react-native-maps";
+import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../components/map/PlatformMapTileLayer";
 import * as Haptics from "expo-haptics";
 import BottomSheet, {
   BottomSheetScrollView,
@@ -124,6 +127,19 @@ import {
 } from "../hooks/useHabitatCadastre";
 import type { CadastreMapHandle } from "../utils/habitatCadastreMapRef";
 import type { HabitatPlot } from "../types/habitat";
+import { useMapLandmarks } from "../hooks/useMapLandmarks";
+import {
+  focusMapOnLandmark,
+  landmarkMapPinKey,
+  regionForAllLandmarks,
+  type MapLandmarkRecord,
+} from "../utils/landmarkMapMarkers";
+import {
+  formatLandClusterCount,
+  LAND_CLUSTER_MAX_ZOOM,
+  regionForLandCluster,
+  type LandMapCluster,
+} from "../utils/landmarkMapClustering";
 import { PropertyDetailCard } from "../components/PropertyDetailCard";
 import PropertySaleList from "./components/PropertySaleList";
 import { HostOnboardingSheet } from "../components/host-onboarding/HostOnboardingSheet";
@@ -1263,6 +1279,11 @@ const SearchScreenInternal = ({
     { latitude: number; longitude: number }[] | null
   >(null);
   const [selectedLandmark, setSelectedLandmark] = useState<any>(null);
+  const [selectedMapLand, setSelectedMapLand] =
+    useState<MapLandmarkRecord | null>(null);
+  const landMapFocusGenRef = useRef(0);
+  const landPanelDismissRef = useRef<(() => void) | null>(null);
+  const [landPinRestoreGen, setLandPinRestoreGen] = useState(0);
   // Start collapsed (index 0) and slide up to full on first mount for a more professional feel
   const [propertiesSheetIndex, setPropertiesSheetIndex] = useState(0);
   const [sellSheetIndex, setSellSheetIndex] = useState(0); // Index 0 = collapsed, 2 = full (under filter bar)
@@ -1276,9 +1297,9 @@ const SearchScreenInternal = ({
   const propertiesAnimatedIndex = useSharedValue(0); // Track properties sheet position
   const sellAnimatedIndex = useSharedValue(0); // Track sell sheet position
   const [isDrawing, setIsDrawing] = useState(false);
-  const [mapType, setMapType] = useState<"standard" | "satellite">("satellite");
+  const [mapType, setMapType] = useState<"standard" | "satellite" | "sentinel">("satellite");
   const [landmarksMapType, setLandmarksMapType] = useState<
-    "standard" | "satellite"
+    "standard" | "satellite" | "sentinel"
   >("satellite"); // Landmarks default to satellite
   const [polygonPoints, setPolygonPoints] = useState<
     { latitude: number; longitude: number }[]
@@ -1318,6 +1339,7 @@ const SearchScreenInternal = ({
   const mapRef = useRef<CadastreMapHandle | null>(null);
   const landmarkSheetRef = useRef<any>(null);
   const landmarksMapRef = useRef<CadastreMapHandle | null>(null);
+  const landsMapFitDoneRef = useRef(false);
   const habitatCadastreFilterRef = useRef<CadastreFilterSheetRef>(null);
   const habitatCadastre = useHabitatCadastre();
   const hostOnboardingSheetRef = useRef<BottomSheetModal | null>(null);
@@ -1784,7 +1806,6 @@ const SearchScreenInternal = ({
       ] as const,
     [user?.ID, langParam, landmarkFiltersSessionKey],
   );
-
   const publicLandmarks = useQuery({
     queryKey: landmarkQueryKey,
     enabled: activeTab === "landmarks",
@@ -1872,6 +1893,22 @@ const SearchScreenInternal = ({
     (publicLandmarks.isPending ||
       publicLandmarks.isLoading ||
       (publicLandmarks.isFetching && landListItems.length === 0));
+
+  const cadastreMapOpen = useMemo(
+    () =>
+      (activeTab === "landmarks" && !listViewModeLandmarks) ||
+      (activeTab === "sell" && !listViewModeSell) ||
+      (activeTab === "properties" && !listViewModeProperties),
+    [
+      activeTab,
+      listViewModeLandmarks,
+      listViewModeSell,
+      listViewModeProperties,
+    ],
+  );
+
+  const mapLandmarksQuery = useMapLandmarks(cadastreMapOpen, langParam);
+  const mapLandmarks = mapLandmarksQuery.data ?? [];
 
   // Helper function for coordinates - must be defined before useMemo that uses it
   const getCoords = (
@@ -2165,28 +2202,29 @@ const SearchScreenInternal = ({
   }, [isLanguageReady]);
 
   useEffect(() => {
-    if (!listViewModeLandmarks) return;
-    if (!landmarksMapRef.current) return;
-    if (!landListItems || landListItems.length === 0) return;
-    const coords: { latitude: number; longitude: number }[] = [];
-    landListItems.forEach((lm: any) => {
-      coords.push(
-        { latitude: lm.point1_lat, longitude: lm.point1_lng },
-        { latitude: lm.point2_lat, longitude: lm.point2_lng },
-        { latitude: lm.point3_lat, longitude: lm.point3_lng },
-        { latitude: lm.point4_lat, longitude: lm.point4_lng },
-      );
-    });
-    const valid = coords.filter(
-      (c) => isFinite(c.latitude) && isFinite(c.longitude),
-    );
-    if (valid.length > 0) {
-      landmarksMapRef.current.fitToCoordinates(valid, {
-        edgePadding: { top: 60, right: 60, bottom: 200, left: 60 },
-        animated: true,
-      });
+    if (!cadastreMapOpen) {
+      landsMapFitDoneRef.current = false;
+      return;
     }
-  }, [landListItems, listViewModeLandmarks]);
+    if (landsMapFitDoneRef.current || !mapLandmarks.length) return;
+
+    const mapHandle =
+      activeTab === "landmarks" && !listViewModeLandmarks
+        ? landmarksMapRef.current
+        : mapRef.current;
+    if (!mapHandle) return;
+
+    const region = regionForAllLandmarks(mapLandmarks);
+    if (region) {
+      mapHandle.animateToRegion(region, 620);
+      landsMapFitDoneRef.current = true;
+    }
+  }, [
+    cadastreMapOpen,
+    mapLandmarks,
+    activeTab,
+    listViewModeLandmarks,
+  ]);
 
   // 10. useFocusEffect (must be last)
   // Only invalidate on actual app reload, not on tab switch
@@ -2304,11 +2342,12 @@ const SearchScreenInternal = ({
   );
 
   const handleHabitatPlotPress = useCallback(
-    async (plot: HabitatPlot) => {
+    (plot: HabitatPlot) => {
       handleDismissPropertyCard({ force: true });
+      setSelectedMapLand(null);
       const cadastreMapRef =
         activeTab === "landmarks" ? landmarksMapRef : mapRef;
-      await habitatCadastre.selectPlot(plot, cadastreMapRef);
+      habitatCadastre.selectPlot(plot, cadastreMapRef);
     },
     [
       handleDismissPropertyCard,
@@ -2317,6 +2356,130 @@ const SearchScreenInternal = ({
       mapRef,
       landmarksMapRef,
     ],
+  );
+
+  const handleMapLandPress = useCallback(
+    (land: MapLandmarkRecord) => {
+      handleDismissPropertyCard({ force: true });
+      habitatCadastre.setSelectedPlot(null);
+      setSelectedMapLand(land);
+      const gen = ++landMapFocusGenRef.current;
+      const mapHandle =
+        activeTab === "landmarks" && !listViewModeLandmarks
+          ? landmarksMapRef.current
+          : mapRef.current;
+      void focusMapOnLandmark(
+        mapHandle,
+        land,
+        habitatCadastre.region,
+      ).then(() => {
+        if (gen !== landMapFocusGenRef.current) return;
+      });
+    },
+    [
+      handleDismissPropertyCard,
+      habitatCadastre,
+      activeTab,
+      listViewModeLandmarks,
+      mapRef,
+      landmarksMapRef,
+    ],
+  );
+
+  const handleMapLandClose = useCallback(() => {
+    landMapFocusGenRef.current += 1;
+    setSelectedMapLand(null);
+    setLandPinRestoreGen((g) => g + 1);
+  }, []);
+
+  const requestMapLandClose = useCallback(() => {
+    if (landPanelDismissRef.current) {
+      landPanelDismissRef.current();
+      return;
+    }
+    handleMapLandClose();
+  }, [handleMapLandClose]);
+
+  const lastLandMapDeltaRef = useRef<number | null>(null);
+  useEffect(() => {
+    const delta = habitatCadastre.region.longitudeDelta;
+    if (
+      selectedMapLand &&
+      lastLandMapDeltaRef.current != null &&
+      delta > lastLandMapDeltaRef.current * 1.15
+    ) {
+      requestMapLandClose();
+    }
+    lastLandMapDeltaRef.current = delta;
+  }, [
+    habitatCadastre.region.longitudeDelta,
+    selectedMapLand,
+    requestMapLandClose,
+  ]);
+
+  const handleMapLandClusterPress = useCallback(
+    async (cluster: LandMapCluster) => {
+      const badgeLabel = formatLandClusterCount(cluster.count);
+      const matchedLands = mapLandmarks.filter((lm) =>
+        cluster.landmarkIds.includes(lm.id),
+      );
+
+      console.log("[LandMapCluster] tap", {
+        badgeLabel,
+        clusterCount: cluster.count,
+        uniquePlotCount: new Set(
+          matchedLands.map((lm) => landmarkMapPinKey(lm)),
+        ).size,
+        landmarkIds: cluster.landmarkIds,
+        landsFound: matchedLands.length,
+        lands: matchedLands.map((lm) => ({
+          id: lm.id,
+          title: lm.title ?? lm.name,
+          habitat_plot_id: lm.habitat_plot_id,
+          centroid_lat: lm.centroid_lat,
+          centroid_lng: lm.centroid_lng,
+        })),
+        countMatchesFound: cluster.count === matchedLands.length,
+        mapZoom: habitatCadastre.zoom,
+        clusterCenter: cluster.coordinate,
+      });
+
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      handleDismissPropertyCard({ force: true });
+      habitatCadastre.setSelectedPlot(null);
+      setSelectedMapLand(null);
+
+      const region = regionForLandCluster(mapLandmarks, cluster.landmarkIds);
+      if (!region) return;
+
+      console.log("[LandMapCluster] zoom target", {
+        revealZoom: LAND_CLUSTER_MAX_ZOOM,
+        targetLongitudeDelta: region.longitudeDelta,
+        targetLatitudeDelta: region.latitudeDelta,
+      });
+
+      const mapHandle =
+        activeTab === "landmarks" && !listViewModeLandmarks
+          ? landmarksMapRef.current
+          : mapRef.current;
+      mapHandle?.animateToRegion(region, 520);
+    },
+    [
+      handleDismissPropertyCard,
+      habitatCadastre,
+      mapLandmarks,
+      activeTab,
+      listViewModeLandmarks,
+      mapRef,
+      landmarksMapRef,
+    ],
+  );
+
+  const handleMapLandViewDetails = useCallback(
+    (land: MapLandmarkRecord) => {
+      (navigation as any).navigate("LandmarkDetails", { landmarkId: land.id });
+    },
+    [navigation],
   );
 
   const handleCadastrePlotViewAllDetails = useCallback(
@@ -2357,8 +2520,23 @@ const SearchScreenInternal = ({
   const handleCadastreMapBackgroundPress = useCallback(() => {
     if (habitatCadastre.selectedPlot) {
       dismissHabitatPlot();
+      return;
     }
-  }, [habitatCadastre.selectedPlot, dismissHabitatPlot]);
+    if (selectedMapLand) {
+      requestMapLandClose();
+    }
+  }, [
+    habitatCadastre.selectedPlot,
+    dismissHabitatPlot,
+    selectedMapLand,
+    requestMapLandClose,
+  ]);
+
+  const showLandMapPanel =
+    !!selectedMapLand &&
+    ((activeTab === "landmarks" && !listViewModeLandmarks) ||
+      (activeTab === "sell" && !listViewModeSell) ||
+      (activeTab === "properties" && !listViewModeProperties));
 
   const showCadastrePlotPanel =
     !!habitatCadastre.selectedPlot &&
@@ -2393,6 +2571,10 @@ const SearchScreenInternal = ({
     habitatCadastreFilterRef.current?.openQuartiers();
   }, []);
 
+  const openCadastreSubSectors = useCallback(() => {
+    habitatCadastreFilterRef.current?.openSubSectors();
+  }, []);
+
   const [cadastreInlinePlotNumber, setCadastreInlinePlotNumber] = useState("");
   const [cadastreInlinePlotSearching, setCadastreInlinePlotSearching] =
     useState(false);
@@ -2417,7 +2599,14 @@ const SearchScreenInternal = ({
     }
     try {
       setCadastreInlinePlotSearching(true);
-      const { plot } = await habitatApi.lookupPlotInSector(sectorId, q);
+      // Scope to the pinned sub-sector (Ilot) when one is selected — without
+      // this, a sector that has sub-sectors can return a same-numbered plot
+      // from a different sub-sector than the one being browsed.
+      const { plot } = await habitatApi.lookupPlotInSector(
+        sectorId,
+        q,
+        habitatCadastre.selectedSubSectorId,
+      );
       if (!plot) return;
       await handleHabitatPlotPress(plot);
       Keyboard.dismiss();
@@ -2429,6 +2618,7 @@ const SearchScreenInternal = ({
     cadastreInlinePlotNumber,
     cadastreInlinePlotSearching,
     habitatCadastre.selectedSectorId,
+    habitatCadastre.selectedSubSectorId,
     habitatCadastre.selectedPlanId,
     handleHabitatPlotPress,
   ]);
@@ -2522,7 +2712,9 @@ const SearchScreenInternal = ({
       if (enteringMap) {
         mapUIState.setBottomSheetState("collapsed");
         dismissHabitatPlot();
-        void showcaseCadastreOnMapOpen(habitatCadastre, mapRef, DISTRICTS);
+        if (mapLandmarks.length === 0) {
+          void showcaseCadastreOnMapOpen(habitatCadastre, mapRef, DISTRICTS);
+        }
       } else {
         mapUIState.setBottomSheetState("expanded");
       }
@@ -2534,7 +2726,9 @@ const SearchScreenInternal = ({
       if (enteringMap) {
         mapUIState.setBottomSheetState("collapsed");
         dismissHabitatPlot();
-        void showcaseCadastreOnMapOpen(habitatCadastre, mapRef, DISTRICTS);
+        if (mapLandmarks.length === 0) {
+          void showcaseCadastreOnMapOpen(habitatCadastre, mapRef, DISTRICTS);
+        }
       } else {
         mapUIState.setBottomSheetState("expanded");
       }
@@ -2545,11 +2739,13 @@ const SearchScreenInternal = ({
       setListViewModeLandmarks((v) => !v);
       if (enteringMap) {
         dismissHabitatPlot();
-        void showcaseCadastreOnMapOpen(
-          habitatCadastre,
-          landmarksMapRef,
-          DISTRICTS,
-        );
+        if (mapLandmarks.length === 0) {
+          void showcaseCadastreOnMapOpen(
+            habitatCadastre,
+            landmarksMapRef,
+            DISTRICTS,
+          );
+        }
       }
     }
   }, [
@@ -2560,6 +2756,7 @@ const SearchScreenInternal = ({
     mapUIState,
     habitatCadastre,
     dismissHabitatPlot,
+    mapLandmarks.length,
   ]);
 
   // Handle property selection: SHEET SNAP FIRST (instant), then card, then state.
@@ -3189,6 +3386,7 @@ const SearchScreenInternal = ({
                         districtFallback={DISTRICTS}
                         onOpenZones={openCadastreZones}
                         onOpenQuartiers={openCadastreQuartiers}
+                        onOpenSubSectors={openCadastreSubSectors}
                         plotNumberValue={cadastreInlinePlotNumber}
                         onPlotNumberChange={setCadastreInlinePlotNumber}
                         onPlotSearch={() => {
@@ -3224,6 +3422,15 @@ const SearchScreenInternal = ({
                         onPlotFound={handleHabitatPlotPress}
                         onPlotViewAllDetails={handleCadastrePlotViewAllDetails}
                         onBackToList={handleBackToListFromMap}
+                        landsForSale={mapLandmarks}
+                        selectedLand={selectedMapLand}
+                        onLandPress={handleMapLandPress}
+                        onLandClusterPress={handleMapLandClusterPress}
+                        onLandClose={handleMapLandClose}
+                        onLandViewDetails={handleMapLandViewDetails}
+                        showLandPanel={showLandMapPanel}
+                        landPinRestoreGeneration={landPinRestoreGen}
+                        landPanelDismissRef={landPanelDismissRef}
                       />
                     </View>
                   ) : null}
@@ -3363,6 +3570,7 @@ const SearchScreenInternal = ({
                       districtFallback={DISTRICTS}
                       onOpenZones={openCadastreZones}
                       onOpenQuartiers={openCadastreQuartiers}
+                      onOpenSubSectors={openCadastreSubSectors}
                       plotNumberValue={cadastreInlinePlotNumber}
                       onPlotNumberChange={setCadastreInlinePlotNumber}
                       onPlotSearch={() => {
@@ -3378,6 +3586,15 @@ const SearchScreenInternal = ({
                       onPlotFound={handleHabitatPlotPress}
                       onPlotViewAllDetails={handleCadastrePlotViewAllDetails}
                       onBackToList={handleBackToListFromMap}
+                      landsForSale={mapLandmarks}
+                      selectedLand={selectedMapLand}
+                      onLandPress={handleMapLandPress}
+                      onLandClusterPress={handleMapLandClusterPress}
+                      onLandClose={handleMapLandClose}
+                      onLandViewDetails={handleMapLandViewDetails}
+                      showLandPanel={showLandMapPanel}
+                      landPinRestoreGeneration={landPinRestoreGen}
+                      landPanelDismissRef={landPanelDismissRef}
                     />
                   </View>
                 ) : null}
@@ -3580,6 +3797,7 @@ const SearchScreenInternal = ({
                       districtFallback={DISTRICTS}
                       onOpenZones={openCadastreZones}
                       onOpenQuartiers={openCadastreQuartiers}
+                      onOpenSubSectors={openCadastreSubSectors}
                       plotNumberValue={cadastreInlinePlotNumber}
                       onPlotNumberChange={setCadastreInlinePlotNumber}
                       onPlotSearch={() => {
@@ -3608,6 +3826,15 @@ const SearchScreenInternal = ({
                       onPlotFound={handleHabitatPlotPress}
                       onPlotViewAllDetails={handleCadastrePlotViewAllDetails}
                       onBackToList={handleBackToListFromMap}
+                      landsForSale={mapLandmarks}
+                      selectedLand={selectedMapLand}
+                      onLandPress={handleMapLandPress}
+                      onLandClusterPress={handleMapLandClusterPress}
+                      onLandClose={handleMapLandClose}
+                      onLandViewDetails={handleMapLandViewDetails}
+                      showLandPanel={showLandMapPanel}
+                      landPinRestoreGeneration={landPinRestoreGen}
+                      landPanelDismissRef={landPanelDismissRef}
                     />
                   </View>
                 ) : null}
@@ -3705,9 +3932,9 @@ const SearchScreenInternal = ({
                     </Text>
                     <View style={pillStyles.landmarkSheetMapContainer}>
                       <MapView
-                        provider={"google"}
+                        provider={getMapProvider()}
                         style={pillStyles.landmarkSheetMap}
-                        mapType="standard"
+                        mapType={getPlatformMapViewConfig("standard").mapType}
                         initialRegion={{
                           latitude:
                             (selectedLandmark.point1_lat +
@@ -3728,6 +3955,7 @@ const SearchScreenInternal = ({
                         showsScale={false}
                         toolbarEnabled={false}
                       >
+                        <PlatformMapTileLayer mapStyle="standard" />
                         <Polygon
                           coordinates={[
                             {

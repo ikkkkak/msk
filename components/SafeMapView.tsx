@@ -12,8 +12,10 @@
 import React from 'react';
 import { Platform } from 'react-native';
 import { MapTilerWebView, MapTilerWebViewProps } from './MapTilerWebView';
-import MapView, { Marker, Polygon, Polyline, UrlTile, Region } from 'react-native-maps';
-import { MAPTILER_API_KEY } from '../config/mapTiler';
+import MapView, { Marker, Polygon, Polyline, Region } from 'react-native-maps';
+import { getMapProvider } from '../utils/mapProvider';
+import { getPlatformMapViewConfig } from '../utils/mapTilerAndroid';
+import { PlatformMapTileLayer } from './map/PlatformMapTileLayer';
 
 export interface SafeMapViewProps {
   /**
@@ -163,15 +165,16 @@ export const SafeMapView: React.FC<SafeMapViewProps> = ({
     return <MapTilerWebView {...webViewProps} />;
   }
 
-  // iOS: Use react-native-maps (no Google Maps SDK on iOS)
-  const isMapTilerConfigured = MAPTILER_API_KEY !== "YOUR_MAPTILER_API_KEY_HERE" && MAPTILER_API_KEY.length > 0;
+  // iOS: native Apple Maps (no MapTiler overlay)
+  const platformMapConfig = getPlatformMapViewConfig('standard');
 
   return (
     <MapView
       ref={mapRef}
       style={[{ height, width }, style]}
       initialRegion={initialRegion}
-      mapType={isMapTilerConfigured ? "none" : "standard"}
+      provider={getMapProvider()}
+      mapType={platformMapConfig.mapType}
       scrollEnabled={scrollEnabled}
       zoomEnabled={zoomEnabled}
       pitchEnabled={pitchEnabled}
@@ -190,14 +193,7 @@ export const SafeMapView: React.FC<SafeMapViewProps> = ({
         onRegionChange?.(region);
       }}
     >
-      {/* MapTiler tiles for iOS (optional) */}
-      {isMapTilerConfigured && (
-        <UrlTile
-          urlTemplate={`https://api.maptiler.com/maps/basic/{z}/{x}/{y}.png?key=${MAPTILER_API_KEY}`}
-          maximumZ={19}
-          flipY={false}
-        />
-      )}
+      <PlatformMapTileLayer mapStyle="standard" />
       
       {/* Markers */}
       {markers.map((marker) => (

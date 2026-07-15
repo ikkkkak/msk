@@ -1,216 +1,159 @@
-/**
- * Cadastre plot detail — compact bottom card with Excel-style field table.
- */
 import React from "react";
-import {
-  View,
-  Text,
-  Pressable,
-  StyleSheet,
-  Platform,
-  I18nManager,
-} from "react-native";
-import { MaterialIcons } from "@expo/vector-icons";
-import { CaretRight } from "phosphor-react-native";
-import * as Haptics from "expo-haptics";
-import { useTranslation } from "react-i18next";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { View, Text, StyleSheet, ScrollView, Pressable } from "react-native";
+import { X } from "phosphor-react-native";
 import type { HabitatPlot } from "../../types/habitat";
-import { HabitatPlotDetailTable } from "./HabitatPlotDetailTable";
+import { useTranslation } from "react-i18next";
 
-type Props = {
+interface HabitatPlotDetailCardProps {
   plot: HabitatPlot;
-  onClose: () => void;
-  onViewAllDetails?: (plot: HabitatPlot) => void;
-};
+  onClose?: () => void;
+}
 
-export function HabitatPlotBottomCard({
-  plot,
-  onClose,
-  onViewAllDetails,
-}: Props) {
-  const { t, i18n } = useTranslation();
-  const insets = useSafeAreaInsets();
-  const isRtl =
-    I18nManager.isRTL || (i18n.language || "").toLowerCase().startsWith("ar");
-  const isForSale = plot.is_for_sale === true;
+export const HabitatPlotDetailCard = React.memo(
+  function HabitatPlotDetailCard({ plot, onClose }: HabitatPlotDetailCardProps) {
+    const { t } = useTranslation();
 
-  const close = () => {
-    Haptics.selectionAsync().catch(() => {});
-    onClose();
-  };
+    const getArea = () => plot.area_m2 || 0;
+    const getDimensions = () => {
+      if (plot.dimensions_string) return plot.dimensions_string;
+      if (plot.sides_m?.length) return plot.sides_m.join(" × ");
+      if (plot.length_m && plot.width_m) return `${plot.length_m}m × ${plot.width_m}m`;
+      return null;
+    };
 
-  const openDetails = () => {
-    if (!isForSale || !onViewAllDetails) return;
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    onViewAllDetails(plot);
-  };
-
-  return (
-    <View
-      style={[styles.host, { paddingBottom: Math.max(insets.bottom, 8) }]}
-      pointerEvents="box-none"
-    >
-      {/* <View style={[styles.card, isRtl && styles.cardRtl]}> */}
-
-      {/* <View style={[styles.toolbar, isRtl && styles.toolbarRtl]}>
-          <Text style={[styles.toolbarTitle, isRtl && styles.textRtl]}>
-            {t("habitatCadastre.card.sheetTitle", "Parcel record")}
-          </Text> */}
-      <View style={styles.toolbarActions}>
-        {isForSale ? (
-          <View style={styles.salePill}>
-            <Text style={styles.salePillText}>
-              {t("habitatCadastre.card.forSale", "For sale")}
+    return (
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <View style={styles.titleContainer}>
+            <Text style={styles.title} numberOfLines={2}>
+              {plot.plot_number}
             </Text>
           </View>
-        ) : null}
+          {onClose && (
+            <Pressable onPress={onClose} style={styles.closeButton}>
+              <X size={24} color="#666" weight="bold" />
+            </Pressable>
+          )}
+        </View>
+
+        <ScrollView style={styles.content} scrollEnabled={false}>
+          <View style={styles.section}>
+            <View style={styles.row}>
+              <Text style={styles.label}>رقم القطعة</Text>
+              <Text style={styles.value}>{plot.plot_number}</Text>
+            </View>
+
+            <View style={styles.row}>
+              <Text style={styles.label}>المساحة</Text>
+              <Text style={styles.value}>{getArea().toFixed(2)} m²</Text>
+            </View>
+
+            {getDimensions() && (
+              <View style={styles.row}>
+                <Text style={styles.label}>الأبعاد</Text>
+                <Text style={styles.value}>{getDimensions()}</Text>
+              </View>
+            )}
+
+            {plot.centroid_lat && plot.centroid_lng && (
+              <View style={styles.row}>
+                <Text style={styles.label}>الموقع</Text>
+                <Text style={styles.value}>
+                  {plot.centroid_lat.toFixed(4)}, {plot.centroid_lng.toFixed(4)}
+                </Text>
+              </View>
+            )}
+
+            {plot.is_for_sale && (
+              <View style={[styles.row, styles.forSaleRow]}>
+                <Text style={styles.forSaleLabel}>
+                  معروض للبيع
+                </Text>
+              </View>
+            )}
+          </View>
+        </ScrollView>
       </View>
-      <Pressable onPress={close} style={styles.close} hitSlop={8}>
-        <MaterialIcons name="close" size={14} color="#6B7280" />
-      </Pressable>
-      {/* </View> */}
-
-      <View style={styles.tableWrap}>
-        <HabitatPlotDetailTable plot={plot} compact includeParcelRow />
-      </View>
-
-      {isForSale && onViewAllDetails ? (
-        <Pressable style={styles.cta} onPress={openDetails}>
-          <Text style={styles.ctaText}>
-            {t("habitatCadastre.card.viewListing", "View listing")}
-          </Text>
-          <CaretRight size={12} color="#1E3A5F" weight="bold" />
-        </Pressable>
-      ) : null}
-      {/* </View> */}
-    </View>
-  );
-}
-
-/** @deprecated Use HabitatPlotPreviewSheet + HabitatPlotPinMarker. */
-export function HabitatPlotCalloutContent(props: Props) {
-  return <HabitatPlotBottomCard {...props} />;
-}
-
-export function HabitatPlotCalloutMarker(_props: Props) {
-  return null;
-}
-
-export function HabitatPlotDetailCard(props: Props) {
-  return <HabitatPlotBottomCard {...props} />;
-}
-
-/** Approximate visible height — keep map padding in sync. */
-export const HABITAT_PLOT_BOTTOM_CARD_HEIGHT = 220;
+    );
+  },
+);
 
 const styles = StyleSheet.create({
-  host: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    zIndex: 10220,
-    elevation: 10220,
-    pointerEvents: "box-none",
-  },
-  card: {
-    marginHorizontal: 10,
-    backgroundColor: "#FFFFFF",
+  container: {
+    backgroundColor: "#FFF",
     borderRadius: 12,
-    overflow: "hidden",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#CBD5E1",
-    ...Platform.select({
-      ios: {
-        shadowColor: "#0F172A",
-        shadowOffset: { width: 0, height: -3 },
-        shadowOpacity: 0.12,
-        shadowRadius: 10,
-      },
-      android: { elevation: 10 },
-    }),
+    padding: 16,
+    marginHorizontal: 12,
+    marginVertical: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+    maxHeight: 400,
   },
-  cardRtl: {
-    alignItems: "stretch",
-  },
-  stripe: {
-    height: 2,
-    backgroundColor: "#1E3A5F",
-  },
-  toolbar: {
+  header: {
     flexDirection: "row",
-    alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 10,
-    paddingTop: 8,
-    paddingBottom: 6,
-    gap: 8,
+    alignItems: "flex-start",
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5E5",
   },
-  toolbarRtl: {
-    flexDirection: "row-reverse",
-  },
-  toolbarTitle: {
+  titleContainer: {
     flex: 1,
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#334155",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
+    marginRight: 12,
   },
-  toolbarActions: {
+  title: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#1A1A1A",
+    letterSpacing: 0.5,
+  },
+  closeButton: {
+    padding: 8,
+    marginRight: -8,
+  },
+  content: {
+    maxHeight: 300,
+  },
+  section: {
+    gap: 12,
+  },
+  row: {
     flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    gap: 6,
+    paddingVertical: 8,
   },
-  salePill: {
-    backgroundColor: "rgba(220, 38, 38, 0.1)",
-    borderRadius: 999,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  salePillText: {
-    fontSize: 8,
-    fontWeight: "700",
-    color: "#B91C1C",
+  label: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#666",
     textTransform: "uppercase",
     letterSpacing: 0.3,
+    flex: 1,
   },
-  close: {
-    width: 22,
-    alignSelf: "flex-end",
-    height: 22,
-    marginRight: 10,
-    marginBottom: 10,
-    borderRadius: 11,
-    backgroundColor: "#F3F4F6",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  tableWrap: {
-    paddingHorizontal: 8,
-    paddingBottom: 6,
-  },
-  cta: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 4,
-    marginHorizontal: 8,
-    marginBottom: 8,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: "#EFF6FF",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#BFDBFE",
-  },
-  ctaText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: "#1E3A5F",
-  },
-  textRtl: {
+  value: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1A1A1A",
     textAlign: "right",
-    writingDirection: "rtl",
+    flex: 1,
+  },
+  forSaleRow: {
+    backgroundColor: "#FEE",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  forSaleLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#E91E63",
+    textAlign: "center",
+    flex: 1,
   },
 });

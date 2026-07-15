@@ -6,6 +6,7 @@ import {
   plotGeometryAnchor,
 } from "../utils/habitatGeometry";
 import { getPlotRings } from "../utils/habitatPlotGeometryCache";
+import { canUseHabitatVectorTiles } from "../utils/habitatVectorTiles";
 
 export const CADASTRE_LOG = "[HabitatCadastre]";
 
@@ -13,13 +14,15 @@ export function devCadastreLog(...args: unknown[]) {
   if (__DEV__) console.log(...args);
 }
 
-/** Always logs API calls (including production) — zone/quartier plot fetch debugging. */
+/** Always logs API calls — pass quiet:true for high-volume geometry batches. */
 export function logCadastreApiRequest(
   method: string,
   path: string,
   params?: Record<string, string | number | boolean | undefined>,
-  result?: Record<string, unknown>,
+  result?: Record<string, unknown> & { quiet?: boolean },
 ) {
+  if (result?.quiet) return;
+  const { quiet: _quiet, ...resultFields } = result ?? {};
   const cleanParams: Record<string, string> = {};
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -34,7 +37,7 @@ export function logCadastreApiRequest(
     full_url: fullUrl,
     api_base: serverUrl,
     params: cleanParams,
-    ...(result ?? {}),
+    ...resultFields,
   });
 }
 
@@ -69,8 +72,10 @@ export function logCadastreQuartierFetchStart(payload: {
     quartier_id: payload.sectorId,
     quartier_name: payload.sectorName,
     count_api: `GET /habitat/sectors/${payload.sectorId}/plots?page=1&limit=1&lite=true`,
-    plots_api: `GET /habitat/sectors/${payload.sectorId}/plots?all=true&lite=true`,
-    geometry_api: `GET /habitat/plots/geometry?ids=... (batched after index)`,
+    plots_api: `GET /habitat/sectors/${payload.sectorId}/plots?lite=true&page=N&limit=500`,
+    geometry_api: canUseHabitatVectorTiles()
+      ? "GPU vector tiles (MVT) — all plots drawn on map"
+      : "GET /habitat/plots/bbox (viewport only) + chunked native polygons",
   });
 }
 
@@ -98,6 +103,29 @@ export function logCadastreQuartierPlotsLoaded(payload: {
     plots_drawn_on_map: payload.plotsDrawn,
     fetch_api: payload.fetchPath,
   });
+}
+
+/** Clear one-line summary — quartier selected, plots found vs drawn. */
+export function logQuartierDrawSummary(payload: {
+  quartierName: string;
+  quartierId: number;
+  plotsFound: number;
+  plotsLoaded: number;
+  plotsWithGeometry: number;
+  plotsDrawn: number;
+  phase?: "index" | "geometry_complete" | "vector_tiles";
+}) {
+  const tag =
+    payload.phase === "geometry_complete"
+      ? " [geometry complete]"
+      : payload.phase === "vector_tiles"
+        ? " [GPU vector tiles — all plots]"
+        : "";
+  console.log(
+    `${CADASTRE_LOG} Quartier selected: "${payload.quartierName}" (id ${payload.quartierId}) | ` +
+      `plots found: ${payload.plotsFound} | loaded: ${payload.plotsLoaded} | ` +
+      `with geometry: ${payload.plotsWithGeometry} | drawn on map: ${payload.plotsDrawn}${tag}`,
+  );
 }
 
 function ringBounds(rings: Array<Array<{ latitude: number; longitude: number }>>) {

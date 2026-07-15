@@ -11,6 +11,8 @@ import { MapPin, NavigationArrow } from "phosphor-react-native";
 import { useTranslation } from "react-i18next";
 import type { LatLng } from "../types/habitat";
 import { getMapProvider, isAppleMapsProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "./map/PlatformMapTileLayer";
 import { theme } from "../theme";
 
 const BLACK = "#222222";
@@ -65,6 +67,10 @@ export default function LandmarkPlotMapSection({
   );
 
   const primaryRing = polygonRings[0] ?? [];
+  const plotMapConfig = useMemo(
+    () => getPlatformMapViewConfig('satellite'),
+    [],
+  );
 
   return (
     <View style={sectionStyle}>
@@ -85,7 +91,7 @@ export default function LandmarkPlotMapSection({
           <View style={styles.mapWrap}>
             <MapView
               provider={getMapProvider()}
-              mapType={isAppleMapsProvider() ? "hybrid" : "satellite"}
+              mapType={plotMapConfig.mapType}
               style={styles.map}
               initialRegion={region}
               scrollEnabled={false}
@@ -97,6 +103,7 @@ export default function LandmarkPlotMapSection({
               showsBuildings={false}
               showsTraffic={false}
             >
+              <PlatformMapTileLayer mapStyle="satellite" />
               {polygonRings.map((ring, idx) => (
                 <Polyline
                   key={`plot-outline-${idx}`}

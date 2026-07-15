@@ -1,24 +1,26 @@
 /**
  * Zoom-level cadastre layers — thin consistent strokes, district color system.
+ * Uses clustering + viewport filtering to handle 7,000+ plots without crashing.
  */
 import React, { memo, useMemo, useCallback } from "react";
 import { View, Text, StyleSheet } from "react-native";
-import { Polygon, Marker } from "react-native-maps";
+import { Polygon, Marker, type Region } from "react-native-maps";
 import type {
   HabitatPlan,
   HabitatPlot,
   HabitatSector,
+  HabitatSubSector,
   HabitatMapViewLevel,
   LatLng,
 } from "../../types/habitat";
 import {
-  extractSectorPolygons,
+  safeSectorDisplayPolygons,
   plotLabelCoordinate,
   ringCentroid,
   sectorCenterCoordinate,
 } from "../../utils/habitatGeometry";
-import { getPlotRings } from "../../utils/habitatPlotGeometryCache";
-import type { PlotShapeDescriptor } from "../../utils/habitatPlotGeometryCache";
+import { getPlotRings, type PlotShapeDescriptor } from "../../utils/habitatPlotGeometryCache";
+import { capPlotShapesForSector } from "../../utils/habitatViewportPlots";
 import { resolvePlanBoundaryRings } from "../../utils/habitatPlanBoundaries";
 import { displayPlotNumber } from "./cadastreFilterUtils";
 import {
@@ -33,12 +35,21 @@ import {
 import {
   MAX_PLOT_NUMBER_LABELS,
   MAX_NATIVE_MAP_CHILDREN,
+  MAX_SECTORS_DRAWN,
 } from "../../utils/habitatMapLimits";
 import {
   shouldShowPlotLabelsOnMap,
   mapZoomFromProps,
   PLAN_LAYER_MAX_ZOOM,
 } from "../../utils/habitatGeo";
+import {
+  filterViewportPlots,
+  simplifyRing,
+  type PlotCluster,
+} from "../../utils/habitatClusteringStrategy";
+import { theme } from "../../theme";
+
+const SUB_SECTOR_ACCENT = theme["color-temporary-primary"];
 
 type DistrictFallback = { name: string; coordinates: LatLng[] };
 
@@ -55,13 +66,24 @@ export type HabitatMapLayersProps = {
   selectedPlanId?: number | null;
   selectedSectorId?: number | null;
   selectedPlotId?: number | null;
+  /** Ilot subdivisions of the pinned quartier — only rendered when non-empty and none selected yet. */
+  subSectors?: HabitatSubSector[];
+  selectedSubSectorId?: number | null;
   districtFallback?: DistrictFallback[];
   onPlanPress?: (planId: number) => void;
   onSectorPress?: (sectorId: number) => void;
+  onSubSectorPress?: (subSectorId: number) => void;
   onPlotPress?: (plot: HabitatPlot) => void;
   selectedPlot?: HabitatPlot | null;
   mapZoom?: number;
   mapLongitudeDelta?: number;
+  mapRegion?: Region;
+  mapNavigating?: boolean;
+  loadingPlots?: boolean;
+  plotsGeometryReady?: boolean;
+  plotsRevealReady?: boolean;
+  /** True when a raster/vector overlay already draws plot polygons — skip native <Polygon> plot rendering here (plan/sector layers still render). */
+  plotsRenderedExternally?: boolean;
 };
 
 function planCentroid(
@@ -173,6 +195,41 @@ const PlotLabel = memo(function PlotLabel({
           >
             {area}
           </Text>
+        ) : null}
+      </View>
+    </Marker>
+  );
+});
+
+/**
+ * Sub-sectors ("Ilot" subdivisions) have no polygon boundary of their own —
+ * only a centroid — so they render as a tappable named pill (like a mini
+ * quartier pin) rather than a filled region like plans/sectors.
+ */
+const SubSectorMarker = memo(function SubSectorMarker({
+  subSector,
+  coordinate,
+  onPress,
+}: {
+  subSector: HabitatSubSector;
+  coordinate: LatLng;
+  onPress?: (subSectorId: number) => void;
+}) {
+  return (
+    <Marker
+      coordinate={coordinate}
+      anchor={{ x: 0.5, y: 0.5 }}
+      tracksViewChanges={false}
+      tappable
+      zIndex={8}
+      onPress={() => onPress?.(subSector.id)}
+    >
+      <View style={styles.subSectorPill} pointerEvents="none">
+        <Text style={styles.subSectorName} numberOfLines={1}>
+          {subSector.name}
+        </Text>
+        {subSector.plot_count != null ? (
+          <Text style={styles.subSectorCount}>{subSector.plot_count}</Text>
         ) : null}
       </View>
     </Marker>
@@ -293,6 +350,46 @@ const PlotGroup = memo(
     prev.selectedPlotId === next.selectedPlotId,
 );
 
+const SectorGroup = memo(function SectorGroup({
+  sector,
+  plan,
+  selected,
+  onSectorPress,
+}: {
+  sector: HabitatSector;
+  plan?: HabitatPlan;
+  selected?: boolean;
+  onSectorPress?: (sectorId: number) => void;
+}) {
+  const rings = safeSectorDisplayPolygons(sector);
+  const center = sectorCenterCoordinate(sector);
+  if (rings.length === 0) return null;
+  return (
+    <>
+      {rings.map((ring, idx) => (
+        <Polygon
+          key={`habitat-sector-${sector.id}-${idx}`}
+          coordinates={ring}
+          strokeColor={habitatSectorStroke(plan, selected)}
+          strokeWidth={selected ? 2.4 : 1.6}
+          fillColor={habitatSectorFill(plan, selected)}
+          lineJoin="round"
+          lineCap="round"
+          tappable={!!onSectorPress}
+          onPress={() => onSectorPress?.(sector.id)}
+        />
+      ))}
+      {center ? (
+        <NameLabel
+          title={sector.name_ar || sector.name}
+          coordinate={center}
+          bold={selected}
+        />
+      ) : null}
+    </>
+  );
+});
+
 function HabitatMapLayersInner({
   plans,
   sectors,
@@ -302,20 +399,41 @@ function HabitatMapLayersInner({
   selectedPlanId = null,
   selectedSectorId = null,
   selectedPlotId = null,
+  subSectors = [],
+  selectedSubSectorId = null,
   districtFallback = [],
   onPlanPress,
   onSectorPress,
+  onSubSectorPress,
   onPlotPress,
   selectedPlot = null,
   mapZoom = 10,
   mapLongitudeDelta,
+  mapRegion,
+  mapNavigating = false,
+  loadingPlots = false,
+  plotsGeometryReady = true,
+  plotsRevealReady = true,
+  plotsRenderedExternally = false,
 }: HabitatMapLayersProps) {
   const z = mapZoomFromProps(mapZoom, mapLongitudeDelta);
   const quartierPinned = selectedSectorId != null;
+  const zoneSelected = selectedPlanId != null;
+  const mapSettled = !mapNavigating;
 
-  const showPlanLayer =
-    !quartierPinned && selectedPlanId == null && z <= PLAN_LAYER_MAX_ZOOM;
-  const showPlots = quartierPinned || z >= 17;
+  const showCityPlans =
+    !zoneSelected && !quartierPinned && z <= PLAN_LAYER_MAX_ZOOM;
+  const showZoneContext =
+    zoneSelected && !quartierPinned && z <= PLAN_LAYER_MAX_ZOOM + 2;
+  const showPlots =
+    !plotsRenderedExternally &&
+    quartierPinned &&
+    mapSettled &&
+    !loadingPlots &&
+    plotsGeometryReady &&
+    plotsRevealReady;
+  const showSubSectors =
+    quartierPinned && selectedSubSectorId == null && subSectors.length > 0;
 
   const labelsZoomOk = shouldShowPlotLabelsOnMap(mapZoom, mapLongitudeDelta);
   const plotCount = plotShapes?.length ?? plots.length;
@@ -325,66 +443,134 @@ function HabitatMapLayersInner({
   const selectedPlan = plans.find((p) => p.id === selectedPlanId) ?? undefined;
 
   const planPolygons = useMemo(() => {
-    if (!showPlanLayer) return [];
-    return plans
-      .map((plan) => ({
-        plan,
-        rings: resolvePlanBoundaryRings(plan, districtFallback),
-        center: planCentroid(plan, districtFallback),
+    if (showCityPlans) {
+      return plans
+        .map((plan) => ({
+          plan,
+          rings: resolvePlanBoundaryRings(plan, districtFallback),
+          center: planCentroid(plan, districtFallback),
+        }))
+        .filter((x) => x.rings.length > 0);
+    }
+    if (showZoneContext && selectedPlanId != null) {
+      const plan = plans.find((p) => p.id === selectedPlanId);
+      if (!plan) return [];
+      const rings = resolvePlanBoundaryRings(plan, districtFallback);
+      if (!rings.length) return [];
+      return [
+        {
+          plan,
+          rings,
+          center: planCentroid(plan, districtFallback),
+        },
+      ];
+    }
+    return [];
+  }, [plans, districtFallback, showCityPlans, showZoneContext, selectedPlanId]);
+
+  const zoneSectorPolygons = useMemo(() => {
+    if (!showZoneContext) return [];
+    return sectors
+      .slice(0, MAX_SECTORS_DRAWN)
+      .map((sector) => ({
+        sector,
+        rings: safeSectorDisplayPolygons(sector),
       }))
       .filter((x) => x.rings.length > 0);
-  }, [plans, districtFallback, showPlanLayer]);
+  }, [showZoneContext, sectors]);
 
   const highlightedSector = useMemo(() => {
-    if (!quartierPinned || selectedSectorId == null) return null;
+    if (!quartierPinned || selectedSectorId == null || loadingPlots) return null;
     const sector = sectors.find((s) => s.id === selectedSectorId);
     if (!sector) return null;
-    const rings = extractSectorPolygons(sector);
+    const rings = safeSectorDisplayPolygons(sector);
     return rings.length ? { sector, rings } : null;
-  }, [quartierPinned, selectedSectorId, sectors]);
+  }, [quartierPinned, selectedSectorId, sectors, loadingPlots]);
 
   const plotShapesResolved = useMemo(() => {
-    if (!showPlots) return [];
-    // Empty array is intentional — never fall back to rendering every loaded plot.
+    if (!showPlots || !mapRegion) return [];
     if (plotShapes != null) return plotShapes;
+
+    // Smart viewport filtering: cluster at low zoom, filter to visible at high zoom
+    const filtered = filterViewportPlots(plots, mapRegion, z);
+
     const out: PlotShapeDescriptor[] = [];
-    const cap = Math.min(plots.length, MAX_NATIVE_MAP_CHILDREN);
-    for (let i = 0; i < cap; i++) {
-      const plot = plots[i]!;
-      const rings = getPlotRings(plot);
+
+    // Render individual plots (high zoom)
+    for (const plot of filtered.individual) {
+      let rings = getPlotRings(plot, { allowCentroidFallback: false });
+      // Simplify geometry to reduce native render cost
+      rings = rings.map((ring) => simplifyRing(ring));
       const labelAt = plotLabelCoordinate(plot);
       if (rings.length) out.push({ plot, rings, labelAt });
       else if (labelAt) out.push({ plot, rings: [], labelAt });
     }
-    return out;
-  }, [plotShapes, plots, showPlots]);
 
-  const totalNativeChildren = useMemo(() => {
-    let n = 0;
-    for (const shape of plotShapesResolved) {
-      n += Math.max(1, shape.rings.length);
-      if (shape.labelAt) n += 1;
+    // Render cluster markers (low zoom)
+    for (const cluster of filtered.clusters) {
+      const clusterPlot: HabitatPlot = {
+        ...(cluster.plots[0] || {
+          id: 0,
+          plan_id: 0,
+          sector_id: 0,
+          centroid_lat: cluster.center.latitude,
+          centroid_lng: cluster.center.longitude,
+          plot_number: "",
+        }),
+        centroid_lat: cluster.center.latitude,
+        centroid_lng: cluster.center.longitude,
+        plot_number: `${cluster.count} plots`,
+      };
+      const labelAt = cluster.center;
+      out.push({ plot: clusterPlot, rings: [], labelAt });
     }
-    return n;
-  }, [plotShapesResolved]);
+
+    return capPlotShapesForSector(out);
+  }, [plotShapes, plots, showPlots, mapRegion, z]);
 
   const plotShapesDrawn = useMemo(() => {
-    if (quartierPinned && plotShapes != null) {
-      return plotShapes;
-    }
-    if (totalNativeChildren <= MAX_NATIVE_MAP_CHILDREN) {
-      return plotShapesResolved;
-    }
-    const out: PlotShapeDescriptor[] = [];
-    let n = 0;
-    for (const shape of plotShapesResolved) {
-      const cost = Math.max(1, shape.rings.length) + (shape.labelAt ? 1 : 0);
-      if (n + cost > MAX_NATIVE_MAP_CHILDREN) break;
-      out.push(shape);
-      n += cost;
-    }
-    return out;
-  }, [plotShapesResolved, totalNativeChildren, quartierPinned, plotShapes]);
+    const source =
+      quartierPinned && plotShapes != null ? plotShapes : plotShapesResolved;
+    return capPlotShapesForSector(source);
+  }, [plotShapesResolved, quartierPinned, plotShapes]);
+
+  const subSectorMarkers = useMemo(() => {
+    if (!showSubSectors) return [];
+    return subSectors
+      .map((s) => {
+        const coordinate =
+          s.centroid_lat != null && s.centroid_lng != null
+            ? { latitude: s.centroid_lat, longitude: s.centroid_lng }
+            : null;
+        return coordinate ? { subSector: s, coordinate } : null;
+      })
+      .filter(
+        (x): x is { subSector: HabitatSubSector; coordinate: LatLng } =>
+          x != null,
+      );
+  }, [showSubSectors, subSectors]);
+
+  const renderSubSectors = useCallback(() => {
+    return subSectorMarkers.map(({ subSector, coordinate }) => (
+      <SubSectorMarker
+        key={`sub-sector-${subSector.id}`}
+        subSector={subSector}
+        coordinate={coordinate}
+        onPress={onSubSectorPress}
+      />
+    ));
+  }, [subSectorMarkers, onSubSectorPress]);
+
+  const renderZoneSectors = useCallback(() => {
+    return zoneSectorPolygons.map(({ sector }) => (
+      <SectorGroup
+        key={`sector-group-${sector.id}`}
+        sector={sector}
+        plan={selectedPlan}
+        onSectorPress={onSectorPress}
+      />
+    ));
+  }, [zoneSectorPolygons, selectedPlan, onSectorPress]);
 
   const renderPlanGroups = useCallback(() => {
     return planPolygons.map(({ plan, rings, center }) => (
@@ -442,15 +628,23 @@ function HabitatMapLayersInner({
     onPlotPress,
   ]);
 
-  if (!showPlanLayer && !showPlots && !highlightedSector) {
+  if (
+    !showCityPlans &&
+    !showZoneContext &&
+    !showPlots &&
+    !showSubSectors &&
+    !highlightedSector
+  ) {
     return null;
   }
 
   return (
     <>
       {renderPlanGroups()}
+      {renderZoneSectors()}
       {renderHighlighted()}
       {renderPlotGroups()}
+      {renderSubSectors()}
     </>
   );
 }
@@ -513,5 +707,28 @@ const styles = StyleSheet.create({
   },
   plotAreaForSale: {
     color: "rgba(255, 255, 255, 0.9)",
+  },
+  subSectorPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: SUB_SECTOR_ACCENT,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    maxWidth: 140,
+    borderWidth: 1.5,
+    borderColor: "#FFFFFF",
+  },
+  subSectorName: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#FFFFFF",
+    flexShrink: 1,
+  },
+  subSectorCount: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "rgba(255,255,255,0.85)",
   },
 });

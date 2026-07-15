@@ -19,7 +19,32 @@ export function isValidCoordinate(c: LatLng | null | undefined): boolean {
   );
 }
 
-/** Nouakchott: lat ~16–20, lng ~−17 to −14 */
+/** Nouakchott / Mauritania bounds for coordinate sanity checks */
+function isMauritaniaLatLng(c: LatLng): boolean {
+  return (
+    c.latitude >= 14 &&
+    c.latitude <= 27 &&
+    c.longitude >= -17.5 &&
+    c.longitude <= -4
+  );
+}
+
+/** RFC 7946 GeoJSON positions are [longitude, latitude]. */
+function geoJsonPairToLatLng(lng: number, lat: number): LatLng | null {
+  const geoJson = { latitude: lat, longitude: lng };
+  if (isValidCoordinate(geoJson) && isMauritaniaLatLng(geoJson)) {
+    return geoJson;
+  }
+  const swapped = { latitude: lng, longitude: lat };
+  if (isValidCoordinate(swapped) && isMauritaniaLatLng(swapped)) {
+    return swapped;
+  }
+  if (isValidCoordinate(geoJson)) return geoJson;
+  if (isValidCoordinate(swapped)) return swapped;
+  return null;
+}
+
+/** Nouakchott: lat ~16–20, lng ~−17 to −14 — legacy [lat,lng] arrays */
 function pairToLatLng(a: number, b: number): LatLng | null {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
 
@@ -71,11 +96,13 @@ function isValidRing(ring: LatLng[]): boolean {
   return span >= MIN_BOUNDING_SPAN;
 }
 
-function coordsArrayToRing(arr: unknown[]): LatLng[] {
+function coordsArrayToRing(arr: unknown[], geoJson = false): LatLng[] {
   const out: LatLng[] = [];
   for (const item of arr) {
     if (Array.isArray(item) && item.length >= 2) {
-      const pt = pairToLatLng(Number(item[0]), Number(item[1]));
+      const a = Number(item[0]);
+      const b = Number(item[1]);
+      const pt = geoJson ? geoJsonPairToLatLng(a, b) : pairToLatLng(a, b);
       if (pt && isValidCoordinate(pt)) out.push(pt);
       continue;
     }
@@ -92,9 +119,9 @@ function coordsArrayToRing(arr: unknown[]): LatLng[] {
   return out;
 }
 
-function polygonRingToLatLng(ring: unknown): LatLng[] {
+function polygonRingToLatLng(ring: unknown, geoJson = false): LatLng[] {
   if (!Array.isArray(ring)) return [];
-  const coords = coordsArrayToRing(ring).filter(isValidCoordinate);
+  const coords = coordsArrayToRing(ring, geoJson).filter(isValidCoordinate);
   return isValidRing(coords) ? closeRing(coords) : [];
 }
 
@@ -125,7 +152,7 @@ function ringsFromGeometry(geom: unknown): LatLng[][] {
   }
 
   if (g.type === "Polygon" && Array.isArray(g.coordinates)) {
-    const ring = polygonRingToLatLng((g.coordinates as unknown[])[0]);
+    const ring = polygonRingToLatLng((g.coordinates as unknown[])[0], true);
     return ring.length ? [ring] : [];
   }
 
@@ -133,25 +160,25 @@ function ringsFromGeometry(geom: unknown): LatLng[][] {
     const out: LatLng[][] = [];
     for (const poly of g.coordinates as unknown[]) {
       if (!Array.isArray(poly) || !poly[0]) continue;
-      const ring = polygonRingToLatLng(poly[0]);
+      const ring = polygonRingToLatLng(poly[0], true);
       if (ring.length) out.push(ring);
     }
     return out;
   }
 
-  // Bare coordinates array (missing type) — treat as polygon outer ring
+  // Bare coordinates array (missing type) — treat as GeoJSON polygon outer ring
   if (Array.isArray(g.coordinates) && Array.isArray((g.coordinates as unknown[])[0])) {
     const first = (g.coordinates as unknown[])[0];
     if (Array.isArray(first) && Array.isArray(first[0])) {
       const out: LatLng[][] = [];
       for (const poly of g.coordinates as unknown[]) {
         if (!Array.isArray(poly) || !poly[0]) continue;
-        const ring = polygonRingToLatLng(poly[0]);
+        const ring = polygonRingToLatLng(poly[0], true);
         if (ring.length) out.push(ring);
       }
       return out;
     }
-    const ring = polygonRingToLatLng((g.coordinates as unknown[])[0]);
+    const ring = polygonRingToLatLng((g.coordinates as unknown[])[0], true);
     return ring.length ? [ring] : [];
   }
 
@@ -228,8 +255,17 @@ function rectangleFromCentroid(
   return ring.filter(isValidCoordinate);
 }
 
-/** All renderable rings for a plot — never returns placeholder squares. */
-export function extractPlotPolygons(plot: HabitatPlot): LatLng[][] {
+export type PlotPolygonOptions = {
+  /** When false, skip centroid-derived placeholder rectangles (bulk map draw). */
+  allowCentroidFallback?: boolean;
+};
+
+/** All renderable rings for a plot. */
+export function extractPlotPolygons(
+  plot: HabitatPlot,
+  opts: PlotPolygonOptions = {},
+): LatLng[][] {
+  const allowCentroidFallback = opts.allowCentroidFallback !== false;
   let result: LatLng[][] = [];
 
   const fromGeom = geoJsonToPolygons(parseGeoField(plot.geom_geojson));
@@ -239,7 +275,7 @@ export function extractPlotPolygons(plot: HabitatPlot): LatLng[][] {
     const fromCorners = cornersToPolygons(plot.corners);
     if (fromCorners.length) {
       result = fromCorners;
-    } else {
+    } else if (allowCentroidFallback) {
       const lat = plot.centroid_lat;
       const lng = plot.centroid_lng;
       if (
@@ -278,6 +314,67 @@ export function extractSectorPolygons(sector: {
   return geoJsonToPolygons(parseGeoField(sector.bounds_geojson))
     .map(ring => ring.filter(isValidCoordinate))
     .filter(ring => ring.length >= 4);
+}
+
+const MAX_SECTOR_MAP_POINTS = 320;
+const MAX_SECTOR_MAP_RINGS = 6;
+
+function boundingBoxRing(points: LatLng[]): LatLng[] {
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  for (const c of points) {
+    if (!isValidCoordinate(c)) continue;
+    minLat = Math.min(minLat, c.latitude);
+    maxLat = Math.max(maxLat, c.latitude);
+    minLng = Math.min(minLng, c.longitude);
+    maxLng = Math.max(maxLng, c.longitude);
+  }
+  if (!Number.isFinite(minLat)) return [];
+  return [
+    { latitude: minLat, longitude: minLng },
+    { latitude: minLat, longitude: maxLng },
+    { latitude: maxLat, longitude: maxLng },
+    { latitude: maxLat, longitude: minLng },
+  ];
+}
+
+function decimateRing(ring: LatLng[], maxPoints: number): LatLng[] {
+  if (ring.length <= maxPoints) return ring;
+  const step = Math.max(1, Math.ceil(ring.length / maxPoints));
+  const out: LatLng[] = [];
+  for (let i = 0; i < ring.length; i += step) {
+    out.push(ring[i]!);
+  }
+  return out.length >= 4 ? out : ring.slice(0, maxPoints);
+}
+
+/** Safe sector rings for native map layers — dense bounds_geojson can crash MKMapView. */
+export function safeSectorDisplayPolygons(sector: {
+  bounds_geojson?: unknown;
+}): LatLng[][] {
+  const rings = extractSectorPolygons(sector);
+  if (!rings.length) return [];
+
+  const totalPoints = rings.reduce((n, r) => n + r.length, 0);
+  if (
+    totalPoints > MAX_SECTOR_MAP_POINTS ||
+    rings.length > MAX_SECTOR_MAP_RINGS
+  ) {
+    const flat = rings.flat().filter(isValidCoordinate);
+    const box = boundingBoxRing(flat);
+    return box.length >= 4 ? [box] : rings.slice(0, 1);
+  }
+
+  const perRingMax = Math.max(
+    8,
+    Math.floor(MAX_SECTOR_MAP_POINTS / Math.max(1, rings.length)),
+  );
+  return rings
+    .slice(0, MAX_SECTOR_MAP_RINGS)
+    .map((ring) => decimateRing(ring, perRingMax))
+    .filter((ring) => ring.length >= 4);
 }
 
 /** Geographic center of a sector polygon (largest ring, area-weighted). */
@@ -464,7 +561,7 @@ export function normalizeMauritaniaLatLng(
 
 /** Best anchor from polygon geometry — geometry wins over DB centroid columns. */
 export function plotGeometryAnchor(plot: HabitatPlot): LatLng | null {
-  const rings = extractPlotPolygons(plot);
+  const rings = extractPlotPolygons(plot, { allowCentroidFallback: true });
   if (!rings.length) return null;
 
   let bestRing = rings[0];
@@ -496,7 +593,7 @@ export function plotLabelCoordinate(plot: HabitatPlot): LatLng | null {
   const anchor = plotAnchorCoordinate(plot);
   if (anchor && isValidCoordinate(anchor)) return anchor;
 
-  const rings = extractPlotPolygons(plot);
+  const rings = extractPlotPolygons(plot, { allowCentroidFallback: true });
   if (rings[0]) {
     const c = ringCentroid(rings[0]);
     if (c && isValidCoordinate(c)) return c;

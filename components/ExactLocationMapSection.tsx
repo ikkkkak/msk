@@ -1,7 +1,10 @@
 import React, { useMemo } from "react";
 import { View, StyleSheet } from "react-native";
 import { Text } from "@ui-kitten/components";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker } from "react-native-maps";
+import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "./map/PlatformMapTileLayer";
 import {
   MapPin,
   House,
@@ -103,8 +106,9 @@ export default function ExactLocationMapSection({
       </Text>
 
       <MapView
-        provider={PROVIDER_GOOGLE}
+        provider={getMapProvider()}
         style={styles.map}
+        mapType={getPlatformMapViewConfig("standard").mapType}
         initialRegion={initialRegion}
         {...MAP_CONFIGS.PROPERTY_DETAILS}
         {...MAP_UI}
@@ -112,6 +116,7 @@ export default function ExactLocationMapSection({
         zoomTapEnabled={false}
         scrollDuringRotateOrZoomEnabled={false}
       >
+        <PlatformMapTileLayer mapStyle="standard" />
         <Marker coordinate={markerCoordinate} tracksViewChanges={false}>
           {getMultiMarker(
             <House size={22} color={ACCENT} weight="fill" />,

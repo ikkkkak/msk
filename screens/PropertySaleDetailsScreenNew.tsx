@@ -20,7 +20,10 @@ import axios from "axios";
 import { useQuery } from "@tanstack/react-query";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { endpoints } from "../constants";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker } from "react-native-maps";
+import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../components/map/PlatformMapTileLayer";
 import { Video, ResizeMode, AVPlaybackStatus } from "expo-av";
 import { useUser } from "../hooks/useUser";
 import BottomSheet, {
@@ -463,8 +466,9 @@ export const PropertySaleDetailsScreenNew = () => {
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Location</Text>
               <MapView
-                provider={PROVIDER_GOOGLE}
+                provider={getMapProvider()}
                 style={styles.map}
+                mapType={getPlatformMapViewConfig("standard").mapType}
                 initialRegion={{
                   latitude: data?.latitude || 0,
                   longitude: data?.longitude || 0,
@@ -474,6 +478,7 @@ export const PropertySaleDetailsScreenNew = () => {
                 scrollEnabled={false}
                 zoomEnabled={false}
               >
+                <PlatformMapTileLayer mapStyle="standard" />
                 <Marker
                   coordinate={{
                     latitude: data?.latitude || 0,

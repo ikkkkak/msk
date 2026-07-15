@@ -38,6 +38,17 @@ export function matchesSector(
   );
 }
 
+export function matchesSubSector(
+  subSector: { name: string; name_ar?: string; code?: string },
+  query: string,
+): boolean {
+  return (
+    matchesCadastreSearch(subSector.name, query) ||
+    matchesCadastreSearch(subSector.name_ar, query) ||
+    matchesCadastreSearch(subSector.code, query)
+  );
+}
+
 /** True when query is mostly digits (plot number search). */
 export function looksLikePlotNumber(query: string): boolean {
   const t = query.trim();

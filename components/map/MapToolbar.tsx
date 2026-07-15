@@ -18,17 +18,22 @@ import {
   Plus,
   Crosshair,
   Stack,
+  Planet,
 } from "phosphor-react-native";
 import type { Region } from "react-native-maps";
 import type { CadastreMapHandle } from "../../utils/habitatCadastreMapRef";
 
-type MapType = "standard" | "satellite";
+type MapType = "standard" | "satellite" | "sentinel";
+
+const MAP_TYPE_CYCLE: readonly MapType[] = ["standard", "satellite", "sentinel"];
 
 type Props = {
   mapRef: React.RefObject<CadastreMapHandle | null>;
   region: Region;
   mapType: MapType;
   onMapTypeChange: (type: MapType) => void;
+  /** Which types the toggle button cycles through — defaults to all 3. Pass a narrower list for map components that don't support every style (e.g. no Sentinel-2 layer wired up). */
+  mapTypeCycle?: readonly MapType[];
   topOffset?: number;
   style?: ViewStyle;
   showZoom?: boolean;
@@ -78,6 +83,7 @@ export const MapToolbar = memo(function MapToolbar({
   region,
   mapType,
   onMapTypeChange,
+  mapTypeCycle = MAP_TYPE_CYCLE,
   topOffset = 0,
   style,
   showZoom = true,
@@ -107,8 +113,17 @@ export const MapToolbar = memo(function MapToolbar({
   );
 
   const toggleMap = useCallback(() => {
-    onMapTypeChange(mapType === "standard" ? "satellite" : "standard");
-  }, [mapType, onMapTypeChange]);
+    const idx = mapTypeCycle.indexOf(mapType);
+    const next = mapTypeCycle[(idx + 1) % mapTypeCycle.length] ?? mapTypeCycle[0]!;
+    onMapTypeChange(next);
+  }, [mapType, mapTypeCycle, onMapTypeChange]);
+
+  const mapTypeLabel =
+    mapType === "standard"
+      ? "Map view"
+      : mapType === "satellite"
+        ? "Satellite view"
+        : "Sentinel-2 (2025) view";
 
   return (
     <View style={[styles.wrap, { top }, style]} pointerEvents="box-none">
@@ -136,12 +151,12 @@ export const MapToolbar = memo(function MapToolbar({
           <>
             <ToolbarBtn
               onPress={toggleMap}
-              active={mapType === "satellite"}
-              accessibilityLabel={
-                mapType === "satellite" ? "Map view" : "Satellite view"
-              }
+              active={mapType !== "standard"}
+              accessibilityLabel={`${mapTypeLabel} — tap to switch`}
             >
-              {mapType === "satellite" ? (
+              {mapType === "sentinel" ? (
+                <Planet size={21} color="#111827" weight="duotone" />
+              ) : mapType === "satellite" ? (
                 <MapTrifold size={21} color="#111827" weight="duotone" />
               ) : (
                 <GlobeHemisphereWest size={21} color="#111827" weight="duotone" />
@@ -187,16 +202,14 @@ const styles = StyleSheet.create({
   },
   group: {
     backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(0,0,0,0.1)",
+    borderRadius: 16,
     overflow: "hidden",
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.14,
-        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.12,
+        shadowRadius: 16,
       },
       android: { elevation: 8 },
     }),
@@ -209,14 +222,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
   },
   btnActive: {
-    backgroundColor: "#F3F4F6",
+    backgroundColor: "#F7F7F7",
   },
   btnPressed: {
-    backgroundColor: "#E5E7EB",
+    backgroundColor: "#EBEBEB",
   },
   divider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: "rgba(0,0,0,0.1)",
+    backgroundColor: "rgba(0,0,0,0.08)",
     marginHorizontal: 8,
   },
 });

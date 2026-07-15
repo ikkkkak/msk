@@ -35,6 +35,9 @@ import {
   pickVideoNative,
 } from "../utils/nativePhotoPicker";
 import MapView, { Marker } from "react-native-maps";
+import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../components/map/PlatformMapTileLayer";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
@@ -1211,9 +1214,10 @@ export const CreatePropertySaleScreen = () => {
         <View style={styles.focusContainer}>
           <View style={styles.mapContainer}>
             <MapView
+              provider={getMapProvider()}
               style={styles.map}
               region={mapRegion}
-              mapType="satellite"
+              mapType={getPlatformMapViewConfig("satellite").mapType}
               onRegionChangeComplete={setMapRegion}
               onPress={(event) => {
                 const { latitude, longitude } = event.nativeEvent.coordinate;
@@ -1222,6 +1226,7 @@ export const CreatePropertySaleScreen = () => {
                 handleInputChange("longitude", longitude);
               }}
             >
+              <PlatformMapTileLayer mapStyle="satellite" />
               {selectedLocation && (
                 <Marker
                   coordinate={selectedLocation}

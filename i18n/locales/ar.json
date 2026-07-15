@@ -1936,6 +1936,11 @@
       "title": "لا توجد قطع أراضي بعد",
       "subtitle": "ستظهر قطع الأراضي هنا عند توفرها."
     },
+    "map": {
+      "viewDetails": "عرض الإعلان",
+      "landsForSaleCount": "{{count}} أرض للبيع على الخريطة",
+      "sides": "الأضلاع"
+    },
     "error": {
       "loadFailed": "فشل في تحميل قطع الأراضي"
     },
@@ -5367,12 +5372,20 @@
     "levelPlotsCount": "{{count}} قطعة محمّلة",
     "levelPlotsLoading": "جاري تحميل {{count}} قطعة…",
     "levelPlotsLoadingGeneric": "جاري تحميل جميع القطع…",
+    "levelPlotsMetadataLoading": "جاري تحميل {{count}} سجل قطعة…",
+    "levelPlotsViewportLoading": "جاري تحميل القطع الظاهرة…",
+    "levelPlotsViewportCount": "{{count}} قطعة في العرض",
+    "levelPlotsPreparing": "جاري تجهيز {{count}} قطعة…",
     "levelPlotsLoaded": "{{loaded}} قطعة محمّلة · {{drawn}} على الخريطة (البيانات كاملة)",
     "levelPlotsRange": "{{drawn}} / {{total}} قطع",
+    "levelPlotsVectorTiles": "{{count}} قطعة — بلاطات متجهة GPU",
+    "largeQuartierNeedsDevClient": "هذه المنطقة تحتوي على عدد كبير من القطع. أعد بناء التطبيق (npx expo run:android) للخريطة الكاملة — Expo Go لا يمكنه رسم كل القطع.",
     "errorLoadSubdivision": "تعذّر تحميل بيانات التقسيم",
     "emptyPlotsForArea": "لا توجد قطع في هذا الحي",
     "emptyAreasForZone": "لا توجد أحياء في هذه المنطقة",
     "loadingZones": "جاري تحميل المناطق…",
+    "gettingPlan": "جاري تحميل المخطط…",
+    "loadingPlanAreas": "جاري تحميل أحياء هذه المنطقة…",
     "loadingPlotsInArea": "جاري تحميل قطع الحي…",
     "card": {
       "zone": "المقاطعة",
@@ -5934,6 +5947,15 @@
       "tenure": "نظام الملكية",
       "tenureValue": "إيجار 70 سنة",
       "unfinished": "غير مفروش"
+    },
+    "dgdpeVerification": {
+      "a11y": "التحقق من مستندات العقار عبر DGDPE",
+      "eyebrow": "تحقق رسمي من العقار",
+      "title": "فحص مستندات DGDPE",
+      "verifiedLine": "تم التحقق من مستندات هذا العقار من قبل DGDPE (المديرية العامة للأملاك والمحافظة العقارية).",
+      "statusLabel": "الحالة",
+      "statusConforme": "مطابق",
+      "footnote": "مستندات الملكية والأرض المقدمة تطابق سجلات المسح الرسمية."
     },
     "trust": {
       "brokerDesc": "تم تأكيد رخصة الوسيط المهنية من Meskeny.",

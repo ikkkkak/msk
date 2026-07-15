@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Platform, Alert } from 'react-native';
-import MapView, { Marker, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, Polygon } from 'react-native-maps';
+import { getMapProvider } from '../utils/mapProvider';
+import { getPlatformMapViewConfig } from '../utils/mapTilerAndroid';
+import { PlatformMapTileLayer } from '../components/map/PlatformMapTileLayer';
 import * as Location from 'expo-location';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -307,9 +310,9 @@ export const LandmarkGuidanceScreen = ({ route, navigation }: { route: { params:
       <View style={styles.mapWrap}>
         <MapView
           ref={mapRef}
-          provider={PROVIDER_GOOGLE}
+          provider={getMapProvider()}
           style={{ flex: 1 }}
-          mapType={mapType}
+          mapType={getPlatformMapViewConfig(mapType).mapType}
           initialRegion={{ latitude: center.latitude, longitude: center.longitude, latitudeDelta: latDelta, longitudeDelta: lngDelta }}
           showsPointsOfInterest={false}
           showsBuildings={false}
@@ -327,6 +330,7 @@ export const LandmarkGuidanceScreen = ({ route, navigation }: { route: { params:
           minZoomLevel={3}
           moveOnMarkerPress={true}
         >
+          <PlatformMapTileLayer mapStyle={mapType} />
           <Polygon coordinates={polyCoords} fillColor="rgba(0, 166, 153, 0.3)" strokeColor="#00A699" strokeWidth={2} />
           {routeCoords.length > 1 && (
             <Polyline 

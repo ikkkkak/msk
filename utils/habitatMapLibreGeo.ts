@@ -1,5 +1,10 @@
 import type { Feature, FeatureCollection, Polygon } from "geojson";
-import type { HabitatPlan, HabitatSector, LatLng } from "../types/habitat";
+import type {
+  HabitatPlan,
+  HabitatSector,
+  HabitatSubSector,
+  LatLng,
+} from "../types/habitat";
 import { extractSectorPolygons } from "./habitatGeometry";
 import { resolvePlanBoundaryRings } from "./habitatPlanBoundaries";
 import { habitatPlanColor } from "./habitatMapTheme";
@@ -40,6 +45,34 @@ export function habitatPlansGeoJSON(
         },
         geometry: geom,
       });
+    });
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/**
+ * Sub-sectors ("Ilot" subdivisions) have no polygon boundary — only a
+ * centroid — so they're Point features rendered as a named pin, not a
+ * filled polygon like plans/sectors.
+ */
+export function habitatSubSectorsGeoJSON(
+  subSectors: HabitatSubSector[],
+): FeatureCollection {
+  const features: Feature[] = [];
+  for (const s of subSectors) {
+    if (s.centroid_lat == null || s.centroid_lng == null) continue;
+    features.push({
+      type: "Feature",
+      id: `sub-sector-${s.id}`,
+      properties: {
+        sub_sector_id: s.id,
+        name: s.name,
+        plot_count: s.plot_count ?? 0,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: [s.centroid_lng, s.centroid_lat],
+      },
     });
   }
   return { type: "FeatureCollection", features };

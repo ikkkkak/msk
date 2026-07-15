@@ -6,7 +6,10 @@
 
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ActivityIndicator, Platform, ViewStyle } from 'react-native';
-import MapView, { Region, MapViewProps, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Region, MapViewProps } from 'react-native-maps';
+import { getMapProvider } from '../utils/mapProvider';
+import { getPlatformMapViewConfig } from '../utils/mapTilerAndroid';
+import { PlatformMapTileLayer } from './map/PlatformMapTileLayer';
 import { MapErrorBoundary } from './MapErrorBoundary';
 import { theme } from '../theme';
 
@@ -50,6 +53,15 @@ export const ProfessionalMapView = React.forwardRef<MapView, ProfessionalMapView
       setIsMapReady(false);
     };
 
+    const incomingMapType = mapProps.mapType;
+    const displayStyle =
+      incomingMapType === "satellite" || incomingMapType === "hybrid"
+        ? "satellite"
+        : "standard";
+    const platformMapConfig = getPlatformMapViewConfig(displayStyle);
+    const { mapType: _ignoredMapType, provider: _ignoredProvider, ...restMapProps } =
+      mapProps;
+
     return (
       <MapErrorBoundary onRetry={handleRetry}>
         <View style={[styles.container, containerStyle]}>
@@ -60,7 +72,7 @@ export const ProfessionalMapView = React.forwardRef<MapView, ProfessionalMapView
           )}
           <MapView
             ref={ref}
-            provider={PROVIDER_GOOGLE}
+            provider={getMapProvider()}
             onMapReady={handleMapReady}
             onError={handleError}
             // Production-ready defaults
@@ -86,9 +98,11 @@ export const ProfessionalMapView = React.forwardRef<MapView, ProfessionalMapView
             pitchEnabled={false}
             rotateEnabled={false}
             // Override with user props
-            {...mapProps}
+            {...restMapProps}
+            mapType={platformMapConfig.mapType}
             style={[styles.map, mapProps.style]}
           >
+            <PlatformMapTileLayer mapStyle={displayStyle} />
             {children}
           </MapView>
         </View>

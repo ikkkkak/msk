@@ -24,7 +24,7 @@ import { CaretRight, CaretLeft, X } from "phosphor-react-native";
 import * as Haptics from "expo-haptics";
 import { useTranslation } from "react-i18next";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { HabitatPlan, HabitatSector } from "../../types/habitat";
+import type { HabitatPlan, HabitatSector, HabitatSubSector } from "../../types/habitat";
 import {
   useCadastreFilterSheet,
   type CadastreFilterSheetRef,
@@ -87,6 +87,32 @@ const SectorRow = memo(function SectorRow({
   );
 });
 
+const SubSectorRow = memo(function SubSectorRow({
+  item,
+  selected,
+  onPress,
+}: {
+  item: HabitatSubSector;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={[styles.listRow, selected && styles.listRowSelected]}
+      onPress={onPress}
+    >
+      <Text style={styles.listRowTitle} numberOfLines={1}>
+        {item.name_ar || item.name}
+      </Text>
+      {item.plot_count != null ? (
+        <Text style={styles.listRowSub} numberOfLines={1}>
+          {item.plot_count} plots
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+});
+
 const SearchResultRow = memo(function SearchResultRow({
   row,
   onPress,
@@ -119,6 +145,24 @@ const SearchResultRow = memo(function SearchResultRow({
         </Text>
         <Text style={styles.listRowSub} numberOfLines={1}>
           {row.plan?.code || row.plan?.name_ar || ""}
+        </Text>
+      </Pressable>
+    );
+  }
+  if (row.kind === "sub_sector") {
+    const ss = row.subSector;
+    return (
+      <Pressable style={styles.listRow} onPress={onPress}>
+        <Text style={styles.badge}>
+          {t("habitatCadastre.badgeSubSector", "Sub-area")}
+        </Text>
+        <Text style={styles.listRowTitle} numberOfLines={1}>
+          {ss.name_ar || ss.name}
+        </Text>
+        <Text style={styles.listRowSub} numberOfLines={1}>
+          {[row.sector?.name_ar || row.sector?.name, ss.plot_count != null ? `${ss.plot_count} plots` : null]
+            .filter(Boolean)
+            .join(" · ")}
         </Text>
       </Pressable>
     );
@@ -157,6 +201,8 @@ function CadastreFilterSheetInner(props: Props) {
   const sheetTitle = useMemo(() => {
     if (s.step === "zones") return t("habitatCadastre.pickZoneTitle");
     if (s.step === "quartiers") return t("habitatCadastre.pickQuartierTitle");
+    if (s.step === "subsectors")
+      return t("habitatCadastre.pickSubSectorTitle", "Select a sub-area");
     return t("habitatCadastre.sheetTitle");
   }, [s.step, t]);
 
@@ -177,14 +223,16 @@ function CadastreFilterSheetInner(props: Props) {
     step,
     draftPlanId,
     draftSectorId,
+    draftSubSectorId,
     setListSearch,
-    applySelection,
     pickZone,
+    selectQuartierSector,
+    selectSubSectorRow,
     onSearchRowPress,
   } = s;
 
   const renderSheetRow = useCallback(
-    ({ item }: { item: HabitatPlan | HabitatSector | UnifiedRow }) => {
+    ({ item }: { item: HabitatPlan | HabitatSector | HabitatSubSector | UnifiedRow }) => {
       if (step === "zones") {
         const plan = item as HabitatPlan;
         return (
@@ -207,7 +255,20 @@ function CadastreFilterSheetInner(props: Props) {
             onPress={() => {
               Haptics.selectionAsync().catch(() => {});
               if (draftPlanId == null) return;
-              void applySelection(draftPlanId, sector.id);
+              void selectQuartierSector(draftPlanId, sector);
+            }}
+          />
+        );
+      }
+      if (step === "subsectors") {
+        const subSector = item as HabitatSubSector;
+        return (
+          <SubSectorRow
+            item={subSector}
+            selected={draftSubSectorId === subSector.id}
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              selectSubSectorRow(subSector.id);
             }}
           />
         );
@@ -222,16 +283,27 @@ function CadastreFilterSheetInner(props: Props) {
         />
       );
     },
-    [step, draftPlanId, draftSectorId, applySelection, pickZone, onSearchRowPress],
+    [
+      step,
+      draftPlanId,
+      draftSectorId,
+      draftSubSectorId,
+      selectQuartierSector,
+      selectSubSectorRow,
+      pickZone,
+      onSearchRowPress,
+    ],
   );
 
   const sheetKeyExtractor = useCallback(
-    (item: HabitatPlan | HabitatSector | UnifiedRow, index: number) => {
+    (item: HabitatPlan | HabitatSector | HabitatSubSector | UnifiedRow, index: number) => {
       if (s.step === "zones") return `z-${(item as HabitatPlan).id}`;
       if (s.step === "quartiers") return `q-${(item as HabitatSector).id}`;
+      if (s.step === "subsectors") return `ss-${(item as HabitatSubSector).id}`;
       const row = item as UnifiedRow;
       if (row.kind === "plan") return `p-${row.plan.id}`;
       if (row.kind === "sector") return `s-${row.sector.id}`;
+      if (row.kind === "sub_sector") return `ss-${row.subSector.id}`;
       return `pl-${row.plot.id}-${index}`;
     },
     [s.step],
@@ -264,7 +336,30 @@ function CadastreFilterSheetInner(props: Props) {
             {s.selectedPlan.name_ar || s.selectedPlan.name}
           </Text>
         ) : null}
+        {s.step === "subsectors" && s.selectedSector ? (
+          <Text style={styles.sheetSubtitle} numberOfLines={1}>
+            {s.selectedSector.name_ar || s.selectedSector.name}
+          </Text>
+        ) : null}
       </View>
+
+      {s.step === "subsectors" ? (
+        <Pressable
+          style={({ pressed }) => [
+            styles.allSubSectorsRow,
+            draftSubSectorId == null && styles.allSubSectorsRowSelected,
+            pressed && { opacity: 0.85 },
+          ]}
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            selectSubSectorRow(null);
+          }}
+        >
+          <Text style={styles.allSubSectorsText}>
+            {t("habitatCadastre.allSubSectors", "All sub-areas in this quartier")}
+          </Text>
+        </Pressable>
+      ) : null}
 
       {s.step === "main" ? (
         <View style={styles.searchWrap}>
@@ -293,7 +388,9 @@ function CadastreFilterSheetInner(props: Props) {
             placeholder={
               s.step === "zones"
                 ? t("habitatCadastre.searchZonePlaceholder")
-                : t("habitatCadastre.searchQuartierPlaceholder")
+                : s.step === "subsectors"
+                  ? t("habitatCadastre.searchSubSectorPlaceholder", "Search sub-area…")
+                  : t("habitatCadastre.searchQuartierPlaceholder")
             }
             placeholderTextColor="#B0B0B0"
             value={s.listSearch}
@@ -377,6 +474,34 @@ function CadastreFilterSheetInner(props: Props) {
               </View>
               <CaretRight size={16} color="#717171" weight="bold" />
             </Pressable>
+
+            {s.draftSectorId != null &&
+            s.draftSectorId === s.cadastre.selectedSectorId &&
+            s.cadastre.subSectors.length > 0 ? (
+              <>
+                <View style={styles.optionDivider} />
+                <Pressable
+                  style={styles.optionRow}
+                  onPress={s.openSubSectorsForAppliedSector}
+                >
+                  <View style={styles.optionTextWrap}>
+                    <Text style={styles.optionLabel}>
+                      {t("habitatCadastre.subSectorLabel", "Sub-area (optional)")}
+                    </Text>
+                    <Text style={styles.optionValue} numberOfLines={1}>
+                      {s.cadastre.pinnedSubSector
+                        ? trimLabel(
+                            s.cadastre.pinnedSubSector.name_ar ||
+                              s.cadastre.pinnedSubSector.name,
+                            22,
+                          )
+                        : t("habitatCadastre.allSubSectorsShort", "All")}
+                    </Text>
+                  </View>
+                  <CaretRight size={16} color="#717171" weight="bold" />
+                </Pressable>
+              </>
+            ) : null}
           </View>
 
           <Text style={[styles.sectionLabel, { marginTop: 8 }]}>
@@ -476,6 +601,15 @@ function CadastreFilterSheetInner(props: Props) {
           </Text>
         )
       ) : null}
+
+      {s.step === "subsectors" ? (
+        <Text style={styles.searchMeta}>
+          {t("habitatCadastre.subSectorCount", {
+            count: s.subSectorListData.length,
+            defaultValue: "{{count}} sub-areas",
+          })}
+        </Text>
+      ) : null}
     </View>
   );
 
@@ -560,6 +694,24 @@ const styles = StyleSheet.create({
   listHeaderPad: {
     paddingHorizontal: 20,
     paddingTop: 4,
+  },
+  allSubSectorsRow: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#EBEBEB",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    backgroundColor: "#FAFAFA",
+  },
+  allSubSectorsRowSelected: {
+    backgroundColor: "#F7F7F7",
+    borderColor: "#D16024",
+  },
+  allSubSectorsText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#222222",
   },
   sheetHeader: {
     marginBottom: 12,

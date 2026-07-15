@@ -9,13 +9,12 @@ import {
   MAX_NATIVE_MAP_CHILDREN,
   MAX_NATIVE_MAP_CHILDREN_SECTOR,
   MAX_PLOTS_DRAWN,
-  MAX_SECTOR_POLYGON_DRAW,
 } from "./habitatMapLimits";
+import { isCadastreGpuMapActive } from "./habitatCadastreRenderer";
 
-/** Pinned quartier — draw every loaded plot regardless of zoom. */
+/** Pinned quartier — every plot in the quartier (geometry filter happens downstream). */
 export function selectPlotsForSectorDraw(plots: HabitatPlot[]): HabitatPlot[] {
-  if (plots.length <= MAX_SECTOR_POLYGON_DRAW) return plots;
-  return plots.slice(0, MAX_SECTOR_POLYGON_DRAW);
+  return plots;
 }
 
 /** Browse mode — viewport sample with cap. */
@@ -64,10 +63,11 @@ export function capPlotShapes(
   return out;
 }
 
-/** Pinned quartier — no polygon shedding; labels stripped upstream when many plots. */
+/** Pinned quartier — GPU draws all plots; RN maps cap native children to avoid OOM. */
 export function capPlotShapesForSector(
   shapes: PlotShapeDescriptor[],
 ): PlotShapeDescriptor[] {
+  if (isCadastreGpuMapActive()) return shapes;
   return capPlotShapes(shapes, MAX_NATIVE_MAP_CHILDREN_SECTOR);
 }
 

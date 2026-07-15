@@ -21,8 +21,8 @@ export const HEADERHEIGHT = Platform.OS === "ios" ? iosHeight : androidHeight;
 // IMPORTANT: Local development must use LAN IP (not Cloud Run), otherwise
 // host suggestions and other in-progress routes can point to stale deployments.
 
-const LOCAL_DEV_SERVER_URL = "http://192.168.100.44:4000/api";
-const PROD_SERVER_URL = "http://192.168.100.44:4000/api";
+const LOCAL_DEV_SERVER_URL = "https://api.meskeny.com/api";
+const PROD_SERVER_URL = "https://api.meskeny.com/api";
 export const serverUrl = __DEV__ ? LOCAL_DEV_SERVER_URL : PROD_SERVER_URL;
 
 /** System account for official Meskeny Team admin messages (matches server MESKENY_TEAM_USER_ID). */

@@ -1,6 +1,9 @@
 import React, { useMemo } from "react";
 import { View, Text, StyleSheet } from "react-native";
-import MapView, { Polygon, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Polygon } from "react-native-maps";
+import { getMapProvider } from "../../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../map/PlatformMapTileLayer";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { useTranslation } from "react-i18next";
 import type { PropertyRecommendation } from "../../services/aiService";
@@ -81,8 +84,8 @@ export function AILandResultsOverviewMap({ items }: Props) {
       ) : null}
       <View style={styles.mapShell}>
         <MapView
-          provider={PROVIDER_GOOGLE}
-          mapType="satellite"
+          provider={getMapProvider()}
+          mapType={getPlatformMapViewConfig("satellite").mapType}
           style={StyleSheet.absoluteFill}
           initialRegion={region}
           scrollEnabled
@@ -94,6 +97,7 @@ export function AILandResultsOverviewMap({ items }: Props) {
           showsBuildings={false}
           toolbarEnabled={false}
         >
+          <PlatformMapTileLayer mapStyle="satellite" />
           {shapes.map((shape) => (
             <Polygon
               key={`plot-${shape.id}`}

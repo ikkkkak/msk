@@ -1,9 +1,13 @@
 import type { HabitatPlot, LatLng } from "../types/habitat";
 import {
+  cornersToPolygons,
   extractPlotPolygons,
+  geoJsonToPolygons,
   plotLabelCoordinate,
   normalizeMauritaniaLatLng,
+  type PlotPolygonOptions,
 } from "./habitatGeometry";
+import { parseGeoField } from "./habitatGeo";
 
 export type PlotShapeDescriptor = {
   plot: HabitatPlot;
@@ -56,6 +60,46 @@ export function isPlotGeometryCached(plotId: number): boolean {
   return geometrySourceByPlotId.has(plotId);
 }
 
+/** True when geom_geojson/corners parse into at least one drawable ring. */
+export function plotHasRenderableGeometry(plot: HabitatPlot): boolean {
+  if (plot.geom_geojson == null && plot.corners == null) return false;
+  if (plot.geom_geojson != null) {
+    const rings = geoJsonToPolygons(parseGeoField(plot.geom_geojson));
+    if (rings.length > 0) return true;
+  }
+  if (plot.corners != null) {
+    const rings = cornersToPolygons(plot.corners);
+    if (rings.length > 0) return true;
+  }
+  return false;
+}
+
+/** Strip heavy fields from lite index rows — geometry is fetched separately. */
+export function slimSectorPlotIndex(plot: HabitatPlot): HabitatPlot {
+  return {
+    id: plot.id,
+    plan_id: plot.plan_id,
+    sector_id: plot.sector_id,
+    plot_number: plot.plot_number,
+    is_for_sale: plot.is_for_sale,
+    area_m2: plot.area_m2,
+    area_rounded: plot.area_rounded,
+    dimensions_string: plot.dimensions_string,
+    sides_m: plot.sides_m,
+    length_m: plot.length_m,
+    width_m: plot.width_m,
+    il_value: plot.il_value,
+    el_value: plot.el_value,
+    res_value: plot.res_value,
+    centroid_lat: plot.centroid_lat,
+    centroid_lng: plot.centroid_lng,
+  };
+}
+
+export function slimSectorPlotList(plots: HabitatPlot[]): HabitatPlot[] {
+  return plots.map(slimSectorPlotIndex);
+}
+
 function pickMetadata(plot: HabitatPlot): StoredMetadata {
   const out: StoredMetadata = {};
   if (plot.area_m2 != null) out.area_m2 = plot.area_m2;
@@ -105,8 +149,15 @@ function plotWithStoredGeometry(plot: HabitatPlot): HabitatPlot {
 }
 
 export function hasStoredPlotGeometry(plot: HabitatPlot): boolean {
-  if (plot.geom_geojson || plot.corners) return true;
-  if (plot.id != null && geometrySourceByPlotId.has(plot.id)) return true;
+  if (plotHasRenderableGeometry(plot)) return true;
+  if (plot.id != null && geometrySourceByPlotId.has(plot.id)) {
+    const stored = geometrySourceByPlotId.get(plot.id)!;
+    return plotHasRenderableGeometry({
+      ...plot,
+      geom_geojson: stored.geom_geojson ?? plot.geom_geojson,
+      corners: stored.corners ?? plot.corners,
+    });
+  }
   if (plot.id != null) {
     const rings = ringsByPlotId.get(plot.id);
     if (rings && rings.length > 0) return true;
@@ -120,7 +171,7 @@ export function ingestPlotGeometryBatch(plots: HabitatPlot[]): void {
     const id = plot.id;
     if (id == null) continue;
 
-    if (plot.geom_geojson || plot.corners) {
+    if (plotHasRenderableGeometry(plot)) {
       geometrySourceByPlotId.set(id, {
         geom_geojson: plot.geom_geojson,
         corners: plot.corners,
@@ -137,16 +188,22 @@ export function ingestPlotGeometryBatch(plots: HabitatPlot[]): void {
 }
 
 /** Cached plot rings — avoids re-parsing GeoJSON on every map render. */
-export function getPlotRings(plot: HabitatPlot): LatLng[][] {
+export function getPlotRings(
+  plot: HabitatPlot,
+  opts: PlotPolygonOptions = {},
+): LatLng[][] {
   const enriched = plotWithStoredGeometry(plot);
   const id = enriched.id;
-  if (id != null) {
+  const allowFallback = opts.allowCentroidFallback === true;
+  if (id != null && !allowFallback) {
     const cached = ringsByPlotId.get(id);
     if (cached) return cached;
   }
 
-  const rings = extractPlotPolygons(enriched);
-  if (id != null) {
+  const rings = extractPlotPolygons(enriched, {
+    allowCentroidFallback: allowFallback,
+  });
+  if (id != null && !allowFallback) {
     trimCache(ringsByPlotId, RINGS_CACHE_CAP);
     ringsByPlotId.set(id, rings);
   }
@@ -166,10 +223,10 @@ export function buildPlotShapeDescriptors(
   const out: PlotShapeDescriptor[] = [];
   for (const plot of plots) {
     const enriched = plotWithStoredGeometry(plot);
-    const rings = getPlotRings(enriched);
+    const rings = getPlotRings(enriched, { allowCentroidFallback: false });
+    if (!rings.length) continue;
     const labelAt = plotLabelCoordinate(enriched);
-    if (rings.length) out.push({ plot: enriched, rings, labelAt });
-    else if (labelAt) out.push({ plot: enriched, rings: [], labelAt });
+    out.push({ plot: enriched, rings, labelAt });
   }
   return out;
 }

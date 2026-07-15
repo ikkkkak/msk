@@ -1,7 +1,10 @@
 import { View, FlatList, StyleSheet } from "react-native";
 import { Text } from "@ui-kitten/components";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
+import MapView from "react-native-maps";
+import { getMapProvider } from "../../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../map/PlatformMapTileLayer";
 
 import { Property } from "../../types/property";
 import { getStateAbbreviation } from "../../utils/getStateAbbreviation";
@@ -30,8 +33,9 @@ export const LocationSection = ({ property }: { property: Property }) => {
       </Text>
       <View style={styles.mapContainer}>
         <MapView
-          provider={PROVIDER_GOOGLE}
+          provider={getMapProvider()}
           style={styles.map}
+          mapType={getPlatformMapViewConfig("standard").mapType}
           initialRegion={{
             latitude: property.lat,
             longitude: property.lng,
@@ -39,6 +43,7 @@ export const LocationSection = ({ property }: { property: Property }) => {
             longitudeDelta: 0.0421,
           }}
         >
+          <PlatformMapTileLayer mapStyle="standard" />
           <MapMarker
             color={theme["color-info-400"]}
             lat={property.lat}

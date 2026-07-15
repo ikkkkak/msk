@@ -20,7 +20,16 @@ import Animated, {
   Easing,
 } from "react-native-reanimated";
 import { MaterialIcons } from "@expo/vector-icons";
-import { CaretRight } from "phosphor-react-native";
+import {
+  CaretRight,
+  MapPin,
+  Buildings,
+  Hash,
+  Ruler,
+  Mountains,
+  ArrowsOutSimple,
+  type Icon,
+} from "phosphor-react-native";
 import * as Haptics from "expo-haptics";
 import { useTranslation } from "react-i18next";
 import type { HabitatPlot, LatLng } from "../../types/habitat";
@@ -29,16 +38,26 @@ import { plotAnchorCoordinate } from "../../utils/habitatGeometry";
 import { displayPlotNumber, localizedHabitatName, formatPlotDimensions } from "./cadastreFilterUtils";
 import { theme } from "../../theme";
 
-export const CARD_WIDTH = 272;
+export const CARD_WIDTH = 288;
 const CALLOUT_LIFT_GAP = 100;
-const POINTER_HEIGHT = 28;
-const PLOT_CARD_FADE_MS = 140;
-const PLOT_SWITCH_MS = 260;
-const PINK = theme["color-temporary-primary"];
+const POINTER_HEIGHT = 22;
+const PLOT_CARD_FADE_MS = 120;
+const PLOT_SWITCH_MS = 200;
+const PLOT_PAN_SYNC_MS = 32;
+/** Design tokens for this card — warm accent + Airbnb-style neutral ink/gray scale. */
+const ACCENT = theme["color-temporary-primary"];
+const INK = "#222222";
+const SUBTLE = "#717171";
+const HAIRLINE = "rgba(0,0,0,0.06)";
 
 export const HABITAT_CALLOUT_POINTER_OFFSET = CALLOUT_LIFT_GAP + POINTER_HEIGHT;
 
-type CalloutRow = { key: string; label: string; value: string };
+type CalloutRow = {
+  key: string;
+  label: string;
+  value: string;
+  icon: Icon;
+};
 
 function formatElevation(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
@@ -71,36 +90,37 @@ function buildCalloutRows(
       key: "district",
       label: arLabel("habitatCadastre.card.zone", "المنطقة"),
       value: (planName || planCode || "—").toLowerCase(),
+      icon: MapPin,
     },
-    // {
-    //   key: "extension",
-    //   label: arLabel("habitatCadastre.card.plan", "المخطط"),
-    //   value: planCode || planName || "—",
-    // },
     {
       key: "module",
       label: arLabel("habitatCadastre.card.module", "الوحدة"),
       value: sectorCode || sectorName || "—",
+      icon: Buildings,
     },
     {
       key: "number",
       label: arLabel("habitatCadastre.card.plotNumber", "رقم القطعة"),
       value: plotNo || "—",
+      icon: Hash,
     },
     {
       key: "area",
       label: arLabel("habitatCadastre.card.areaSize", "المساحة"),
       value: area != null && Number(area) > 0 ? `${area} m²` : "—",
+      icon: Ruler,
     },
     {
       key: "elevation",
       label: arLabel("habitatCadastre.card.elevation", "الارتفاع"),
       value: formatElevation(plot.el_value),
+      icon: Mountains,
     },
     {
       key: "dimensions",
       label: arLabel("habitatCadastre.card.sides", "الأضلاع"),
       value: formatPlotDimensions(plot),
+      icon: ArrowsOutSimple,
     },
   ];
 }
@@ -108,8 +128,7 @@ function buildCalloutRows(
 const CalloutPointer = memo(function CalloutPointer() {
   return (
     <View style={styles.pointerWrap} pointerEvents="none">
-      <View style={styles.pointerOuter} />
-      <View style={styles.pointerInner} />
+      <View style={styles.pointerDiamond} />
     </View>
   );
 });
@@ -153,18 +172,20 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
   return (
     <View style={styles.cardShadowWrap}>
       <View style={styles.card}>
-        <View style={[styles.headerStripe, styles.headerStripeGreen]}>
-          {/* <Text style={styles.headerStripeTitle} numberOfLines={1}>
-            {t("onboarding.welcome.meskeny", "MESKENY")}
-          </Text> */}
-          {/*  add here a logo */}
+        <View style={styles.header}>
           <Image
             source={require("../../assets/logo-bg-white.png")}
-            style={{
-              width: 40,
-              height: 40,
-            }}
+            style={styles.headerLogo}
+            resizeMode="contain"
           />
+          {isForSale ? (
+            <View style={styles.forSalePill}>
+              <View style={styles.forSaleDot} />
+              <Text style={styles.forSalePillText}>
+                {t("habitatCadastre.card.forSale", "For sale")}
+              </Text>
+            </View>
+          ) : null}
           <Pressable
             onPress={dismiss}
             hitSlop={10}
@@ -172,71 +193,55 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
             accessibilityRole="button"
             accessibilityLabel={t("common.close", "Close")}
           >
-            <MaterialIcons name="close" size={18} color="#374151" />
+            <MaterialIcons name="close" size={16} color={INK} />
           </Pressable>
         </View>
 
-        {/* <View style={[styles.headerStripe, styles.headerStripeLavender]}>
-          <View style={[styles.logoCircle, styles.logoCircleAlt]}>
-            <Text style={styles.logoTextAlt}>⌂</Text>
-          </View>
-          <Text style={styles.headerStripeSubtitle} numberOfLines={1}>
-            {arLabel("habitatCadastre.card.officialRecord", "قطعة مسحية")}
-          </Text>
-        </View> */}
-
-        <View style={styles.table}>
-          {rows.map((row, index) => (
-            <View
-              key={row.key}
-              style={[
-                styles.tableRow,
-                index === rows.length - 1 && styles.tableRowLast,
-              ]}
-            >
-              <Text style={styles.valueCell} numberOfLines={3}>
-                {row.value}
-              </Text>
-              <View style={styles.colDivider} />
-              <Text style={styles.labelCell} numberOfLines={2}>
-                {row.label}
-              </Text>
-            </View>
-          ))}
+        <View style={styles.grid}>
+          {rows.map((row) => {
+            const RowIcon = row.icon;
+            return (
+              <View key={row.key} style={styles.gridCell}>
+                <View style={styles.gridIconWrap}>
+                  <RowIcon size={15} color={ACCENT} weight="bold" />
+                </View>
+                <View style={styles.gridTextWrap}>
+                  <Text style={styles.gridValue} numberOfLines={1}>
+                    {row.value}
+                  </Text>
+                  <Text style={styles.gridLabel} numberOfLines={1}>
+                    {row.label}
+                  </Text>
+                </View>
+              </View>
+            );
+          })}
         </View>
 
         {isForSale && onViewAllDetails ? (
-          <View style={styles.saleFooter}>
-            <View style={styles.saleBadge}>
-              <Text style={styles.saleBadgeText}>
-                {t("habitatCadastre.card.forSale", "For sale")}
-              </Text>
-            </View>
-            <Pressable
-              style={styles.saleCta}
-              onPress={openListing}
-              accessibilityRole="button"
-              accessibilityLabel={t(
-                "habitatCadastre.card.viewListing",
-                "View listing",
-              )}
-            >
-              <Text style={styles.saleCtaText}>
-                {t("habitatCadastre.card.viewListing", "View listing")}
-              </Text>
-              <CaretRight
-                size={14}
-                color="#B91C1C"
-                weight="bold"
-                style={isRtl ? styles.caretRtl : undefined}
-              />
-            </Pressable>
-          </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.saleCta,
+              pressed && styles.saleCtaPressed,
+            ]}
+            onPress={openListing}
+            accessibilityRole="button"
+            accessibilityLabel={t(
+              "habitatCadastre.card.viewListing",
+              "View listing",
+            )}
+          >
+            <Text style={styles.saleCtaText}>
+              {t("habitatCadastre.card.viewListing", "View listing")}
+            </Text>
+            <CaretRight
+              size={15}
+              color="#FFFFFF"
+              weight="bold"
+              style={isRtl ? styles.caretRtl : undefined}
+            />
+          </Pressable>
         ) : null}
-
-        {/* <View style={styles.footer}>
-          <Text style={styles.footerBrand}>meskeny</Text>
-        </View> */}
       </View>
     </View>
   );
@@ -245,8 +250,10 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
 /** Native pin — always locked to the plot's lat/lng on the map. */
 export const HabitatPlotPinMarker = memo(function HabitatPlotPinMarker({
   coordinate,
+  onPress,
 }: {
   coordinate: LatLng;
+  onPress?: () => void;
 }) {
   const pinScale = useSharedValue(1);
 
@@ -268,7 +275,8 @@ export const HabitatPlotPinMarker = memo(function HabitatPlotPinMarker({
       anchor={{ x: 0.5, y: 0.5 }}
       zIndex={1001}
       tracksViewChanges={false}
-      tappable={false}
+      tappable={!!onPress}
+      onPress={onPress}
     >
       <Animated.View style={[styles.pinDot, pinStyle]} pointerEvents="none" />
     </Marker>
@@ -287,6 +295,7 @@ type OverlayProps = {
   plot: HabitatPlot;
   coordinate: LatLng;
   regionSyncRef: PlotCalloutRegionSyncRef;
+  regionIdleSyncRef?: PlotCalloutRegionSyncRef;
   onClose: () => void;
   onViewAllDetails?: (plot: HabitatPlot) => void;
 };
@@ -298,6 +307,7 @@ export const HabitatPlotCalloutOverlay = memo(
     plot,
     coordinate,
     regionSyncRef,
+    regionIdleSyncRef,
     onClose,
     onViewAllDetails,
   }: OverlayProps) {
@@ -309,12 +319,15 @@ export const HabitatPlotCalloutOverlay = memo(
 
     const cardHeightRef = useRef(320);
     const readyRef = useRef(false);
+    const mountedRef = useRef(true);
     const prevPlotIdRef = useRef<number | null>(null);
     const syncGenRef = useRef(0);
     const rafRef = useRef<number | null>(null);
+    const lastSyncAtRef = useRef(0);
 
     const applyScreenPoint = useCallback(
       (x: number, y: number) => {
+        if (!mountedRef.current) return;
         const stackHeight =
           cardHeightRef.current + HABITAT_CALLOUT_POINTER_OFFSET;
         translateX.value = x - CARD_WIDTH / 2;
@@ -328,12 +341,13 @@ export const HabitatPlotCalloutOverlay = memo(
     );
 
     const syncScreenPoint = useCallback(async () => {
+      if (!mountedRef.current) return;
       const map = mapRef.current;
       if (!map?.pointForCoordinate) return;
       const gen = ++syncGenRef.current;
       try {
         const point = await map.pointForCoordinate(coordinate);
-        if (gen !== syncGenRef.current) return;
+        if (!mountedRef.current || gen !== syncGenRef.current) return;
         if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
           applyScreenPoint(point.x, point.y);
         }
@@ -343,6 +357,7 @@ export const HabitatPlotCalloutOverlay = memo(
     }, [applyScreenPoint, coordinate, mapRef]);
 
     const scheduleSync = useCallback(() => {
+      if (!mountedRef.current) return;
       if (rafRef.current != null) return;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
@@ -350,13 +365,41 @@ export const HabitatPlotCalloutOverlay = memo(
       });
     }, [syncScreenPoint]);
 
+    const scheduleSyncThrottled = useCallback(() => {
+      if (!mountedRef.current) return;
+      const now = Date.now();
+      if (now - lastSyncAtRef.current < PLOT_PAN_SYNC_MS) return;
+      lastSyncAtRef.current = now;
+      scheduleSync();
+    }, [scheduleSync]);
+
     useEffect(() => {
-      regionSyncRef.current = scheduleSync;
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        syncGenRef.current += 1;
+        if (rafRef.current != null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+      };
+    }, []);
+
+    useEffect(() => {
+      regionSyncRef.current = scheduleSyncThrottled;
       return () => {
         regionSyncRef.current = null;
         readyRef.current = false;
       };
-    }, [regionSyncRef, scheduleSync]);
+    }, [regionSyncRef, scheduleSyncThrottled]);
+
+    useEffect(() => {
+      if (!regionIdleSyncRef) return;
+      regionIdleSyncRef.current = scheduleSync;
+      return () => {
+        regionIdleSyncRef.current = null;
+      };
+    }, [regionIdleSyncRef, scheduleSync]);
 
     useEffect(() => {
       const switched =
@@ -486,149 +529,115 @@ const styles = StyleSheet.create({
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.22,
-        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.16,
+        shadowRadius: 24,
       },
-      android: { elevation: 12 },
+      android: { elevation: 14 },
     }),
   },
   card: {
     width: CARD_WIDTH,
     backgroundColor: "#FFFFFF",
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: "#B0B0B0",
+    borderRadius: 20,
     overflow: "hidden",
   },
-  closeBtn: {
-    width: 26,
-    height: 26,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.92)",
-    borderRadius: 13,
-  },
-  headerStripe: {
+  header: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    justifyContent: "space-between",
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderBottomWidth: 1,
-    borderBottomColor: "#B8B8B8",
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 10,
   },
-  headerStripeGreen: {
-    backgroundColor: "#FFF",
+  headerLogo: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
   },
-  headerStripeLavender: { backgroundColor: "#DDD6F3" },
-  logoCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#9CA3AF",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  logoCircleAlt: { backgroundColor: "#F8F7FF" },
-  logoText: { fontSize: 12, fontWeight: "800", color: "#166534" },
-  logoTextAlt: { fontSize: 13, fontWeight: "700", color: "#5B4B8A" },
-  headerStripeTitle: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#FFF",
-    letterSpacing: 0.8,
-  },
-  headerStripeSubtitle: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#374151",
-    textAlign: "right",
-    writingDirection: "rtl",
-  },
-  table: { borderTopWidth: 0 },
-  tableRow: {
-    flexDirection: "row",
-    alignItems: "stretch",
-    minHeight: 34,
-    borderBottomWidth: 1,
-    borderBottomColor: "#C8C8C8",
-    backgroundColor: "#FFFFFF",
-  },
-  tableRowLast: { borderBottomWidth: 0 },
-  valueCell: {
-    flex: 0.56,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    fontSize: 12,
-    fontWeight: "500",
-    color: "#111827",
-    textAlign: "left",
-  },
-  labelCell: {
-    flex: 0.44,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#1F2937",
-    textAlign: "right",
-    writingDirection: "rtl",
-  },
-  colDivider: { width: 1, backgroundColor: "#C8C8C8" },
-  footer: {
-    borderTopWidth: 1,
-    borderTopColor: "#C8C8C8",
-    paddingVertical: 8,
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-  },
-  footerBrand: {
-    fontSize: 13,
-    fontWeight: "500",
-    color: "#374151",
-    letterSpacing: 0.3,
-  },
-  saleFooter: {
+  forSalePill: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-    borderTopWidth: 1,
-    borderTopColor: "#FECACA",
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    backgroundColor: "#FEF2F2",
-  },
-  saleBadge: {
-    backgroundColor: "rgba(220, 38, 38, 0.12)",
+    gap: 5,
+    backgroundColor: "rgba(220, 38, 38, 0.1)",
     borderRadius: 999,
-    paddingHorizontal: 8,
+    paddingHorizontal: 9,
     paddingVertical: 4,
   },
-  saleBadgeText: {
-    fontSize: 10,
+  forSaleDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#DC2626",
+  },
+  forSalePillText: {
+    fontSize: 11,
     fontWeight: "700",
-    color: "#B91C1C",
-    textTransform: "uppercase",
-    letterSpacing: 0.35,
+    color: "#DC2626",
+    letterSpacing: 0.2,
+  },
+  closeBtn: {
+    marginLeft: "auto",
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F7F7F7",
+    borderRadius: 14,
+  },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    paddingHorizontal: 10,
+    paddingBottom: 12,
+    borderTopWidth: 1,
+    borderTopColor: HAIRLINE,
+    paddingTop: 12,
+  },
+  gridCell: {
+    width: "50%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 4,
+    paddingVertical: 7,
+  },
+  gridIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(209, 96, 36, 0.1)",
+  },
+  gridTextWrap: { flex: 1, minWidth: 0 },
+  gridValue: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: INK,
+  },
+  gridLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    color: SUBTLE,
+    marginTop: 1,
   },
   saleCta: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 2,
-    paddingVertical: 4,
-    paddingHorizontal: 2,
+    justifyContent: "center",
+    gap: 6,
+    marginHorizontal: 10,
+    marginBottom: 10,
+    paddingVertical: 12,
+    borderRadius: 13,
+    backgroundColor: "#DC2626",
   },
+  saleCtaPressed: { opacity: 0.85 },
   saleCtaText: {
-    fontSize: 12,
+    fontSize: 14,
     fontWeight: "700",
-    color: "#B91C1C",
+    color: "#FFFFFF",
   },
   caretRtl: {
     transform: [{ scaleX: -1 }],
@@ -640,34 +649,38 @@ const styles = StyleSheet.create({
     width: CARD_WIDTH,
     height: POINTER_HEIGHT,
   },
-  pointerOuter: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 11,
-    borderRightWidth: 11,
-    borderTopWidth: 13,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderTopColor: "#B0B0B0",
-  },
-  pointerInner: {
-    position: "absolute",
-    top: 0,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 10,
-    borderRightWidth: 10,
-    borderTopWidth: 12,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderTopColor: "#FFFFFF",
+  pointerDiamond: {
+    width: 16,
+    height: 16,
+    borderRadius: 3,
+    backgroundColor: "#FFFFFF",
+    transform: [{ rotate: "45deg" }],
+    marginTop: -POINTER_HEIGHT / 2,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 2, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+      },
+      android: { elevation: 3 },
+    }),
   },
   pinDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: PINK,
-    borderWidth: 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: ACCENT,
+    borderWidth: 3,
     borderColor: "#FFFFFF",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+      },
+      android: { elevation: 4 },
+    }),
   },
 });

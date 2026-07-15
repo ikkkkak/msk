@@ -51,6 +51,9 @@ import {
   SoldPropertyImageVeil,
   SoldPropertyTractionPoster
 } from "./SoldPropertyTractionPoster";
+import { propertyHasTrucheck } from "./property/PropertyDgdpeVerificationCard";
+
+const DGDPE_LOGO = require("../assets/DGDPE.png");
 
 // ============================================================
 // Design Tokens - Chinese Real Estate App Style
@@ -124,6 +127,7 @@ export interface PropertyData {
   };
   status?: string;
   trucheck?: boolean;
+  truckeck?: boolean;
   off_plan?: boolean;
   initial_sale?: boolean;
   extra_badges?: string[];
@@ -470,6 +474,14 @@ const Badge: React.FC<{ label: string; dark?: boolean; gold?: boolean }> =
     </View>
   ));
 
+const TruCheckDgdpeBadge = React.memo(function TruCheckDgdpeBadge() {
+  return (
+    <View style={bd.trucheckPill} accessibilityLabel="TruCheck verified">
+      <Image source={DGDPE_LOGO} style={bd.trucheckLogo} resizeMode="contain" />
+    </View>
+  );
+});
+
 const bd = StyleSheet.create({
   pill: {
     flexDirection: "row",
@@ -488,7 +500,19 @@ const bd = StyleSheet.create({
   text: { fontSize: 9, fontWeight: "700", letterSpacing: 0.2 },
   textLight: { color: T.white },
   textDark: { color: T.ink },
-  textGold: { color: "#B45309" }
+  textGold: { color: "#B45309" },
+  trucheckPill: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,255,255,0.94)",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#BBF7D0",
+  },
+  trucheckLogo: {
+    width: 22,
+    height: 22,
+  },
 });
 
 // ============================================================
@@ -1072,15 +1096,12 @@ export const ZillowStylePropertyCard: React.FC<PropertyCardProps> = ({
     return null;
   }, [price, area]);
 
+  const showTrucheck = propertyHasTrucheck(property);
+
   const badges = useMemo(() => {
     const b: { label: string; dark?: boolean; gold?: boolean }[] = [];
     if (showGold)
       b.push({ label: t("propertyCard.goldListing", "Gold"), gold: true });
-    if (property.trucheck)
-      b.push({
-        label: t("propertyCard.trucheckVerified", "TruCheck verified"),
-        dark: true
-      });
     const tb =
       property.owner?.true_broker || property.organization?.owner?.true_broker;
     if (tb)
@@ -1092,17 +1113,12 @@ export const ZillowStylePropertyCard: React.FC<PropertyCardProps> = ({
       b.push({ label: t("propertyCard.offPlan", "Off-plan") });
     if (property.initial_sale)
       b.push({ label: t("propertyCard.initialSale", "Initial sale") });
-    if (property.status) {
-      b.push({
-        label: localizeListingStatus(property.status, t),
-        dark: property.status.toLowerCase() !== "published",
-      });
-    }
+   
     (property.extra_badges ?? [])
       .slice(0, 2)
       .forEach((l) => b.push({ label: l }));
     return b;
-  }, [property, showGold, t]);
+  }, [property, showGold, showTrucheck, t]);
 
   const feeTableRows = useMemo(() => {
     const rows: { label: string; value: string; highlight?: boolean }[] = [];
@@ -1211,8 +1227,9 @@ export const ZillowStylePropertyCard: React.FC<PropertyCardProps> = ({
           {isSold && <SoldPropertyImageVeil />}
 
           {/* Badges row */}
-          {(showGoodDeal || badges.length > 0) && (
+          {(showGoodDeal || showTrucheck || badges.length > 0) && (
             <View style={s.badgesRow} pointerEvents="none">
+              {showTrucheck ? <TruCheckDgdpeBadge /> : null}
               {showGoodDeal && (
                 <View style={s.goodDealBadge}>
                   <Text style={s.goodDealBadgeText}>

@@ -1968,6 +1968,11 @@
       "title": "No land plots yet",
       "subtitle": "Land plots will appear here when available."
     },
+    "map": {
+      "viewDetails": "View listing",
+      "landsForSaleCount": "{{count}} lands for sale on map",
+      "sides": "Sides"
+    },
     "error": {
       "loadFailed": "Failed to load land plots"
     },
@@ -5209,12 +5214,20 @@
     "levelPlotsCount": "{{count}} plots loaded",
     "levelPlotsLoading": "Loading all {{count}} plots…",
     "levelPlotsLoadingGeneric": "Loading all plots…",
+    "levelPlotsMetadataLoading": "Loading {{count}} plot records…",
+    "levelPlotsViewportLoading": "Loading visible plots…",
+    "levelPlotsViewportCount": "{{count}} plots in view",
+    "levelPlotsPreparing": "Preparing {{count}} plots…",
     "levelPlotsLoaded": "{{loaded}} plots loaded · {{drawn}} on map (all data ready)",
     "levelPlotsRange": "{{drawn}} / {{total}} plots",
+    "levelPlotsVectorTiles": "{{count}} plots — GPU vector tiles",
+    "largeQuartierNeedsDevClient": "This area has many plots. Rebuild the app (npx expo run:android) for full GPU map — Expo Go cannot draw all plots.",
     "errorLoadSubdivision": "Could not load subdivision data",
     "emptyPlotsForArea": "No plots for this area",
     "emptyAreasForZone": "No areas for this zone",
     "loadingZones": "Loading zones...",
+    "gettingPlan": "We're getting your plan…",
+    "loadingPlanAreas": "Loading quartiers for this zone…",
     "loadingPlotsInArea": "Loading area plots...",
     "card": {
       "zone": "Zone",
@@ -5904,6 +5917,15 @@
       "tenure": "Tenure",
       "tenureValue": "70-year lease",
       "unfinished": "Unfurnished"
+    },
+    "dgdpeVerification": {
+      "a11y": "DGDPE property papers verification",
+      "eyebrow": "Official property verification",
+      "title": "DGDPE document check",
+      "verifiedLine": "This property's papers have been verified by the DGDPE (Direction Générale des Domaines et de la Conservation Foncière).",
+      "statusLabel": "Status",
+      "statusConforme": "Conforme",
+      "footnote": "Submitted title and land documents match official cadastre records."
     },
     "trust": {
       "brokerDesc": "Professional broker license confirmed by Meskeny.",

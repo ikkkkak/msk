@@ -3,22 +3,66 @@
  * Phase 2+: MapLibre VectorSource points at these tiles instead of 7K React polygons.
  */
 import { serverUrl } from "../constants";
-import { isMapLibreNativeAvailable } from "./habitatMapLibreNative";
+import {
+  isMapLibreNativeAvailable,
+  markMapLibreNativeUnavailable,
+} from "./habitatMapLibreNative";
+import { isCadastreGpuMapActive } from "./habitatCadastreRenderer";
 
-/** Enable vector-tile architecture when MapLibre is linked (requires native rebuild). */
-export const USE_HABITAT_VECTOR_TILES = true;
+/**
+ * GPU vector tiles (MapLibre) — FORCED OFF. Product decision: the cadastre
+ * map must always show the platform's own default map provider (Apple Maps
+ * on iOS, Google Maps on Android) and its own imagery — never a MapLibre GL
+ * canvas styled with third-party tiles (MapTiler/Esri), even though that
+ * path renders plot polygons without the raster-tile zoom flicker. Do not
+ * flip this back on without explicit direction — it was toggled twice this
+ * session and reverted both times. Native map + server-rendered raster
+ * overlay (habitatRasterOverlay.ts) is the only supported rendering path.
+ */
+export const USE_HABITAT_VECTOR_TILES = false;
 
-/** Runtime gate: flag on AND MapLibre native binary present. */
+/** Above this count, react-native-maps per-plot geometry prefetch is disabled (OOM). */
+export const LARGE_QUARTIER_PLOT_THRESHOLD = 150;
+
+/** Runtime gate: GPU MapLibre map mounted or native modules present. */
 export function canUseHabitatVectorTiles(): boolean {
-  return USE_HABITAT_VECTOR_TILES && isMapLibreNativeAvailable();
+  if (!USE_HABITAT_VECTOR_TILES) return false;
+  if (isCadastreGpuMapActive()) return true;
+  return isMapLibreNativeAvailable();
 }
 
+/** Skip RN polygon geometry when GPU tiles handle drawing. */
+export function shouldPrefetchPlotGeometry(_plotCount: number): boolean {
+  return !isCadastreGpuMapActive();
+}
+
+export function isLargeQuartier(plotCount: number): boolean {
+  return plotCount > LARGE_QUARTIER_PLOT_THRESHOLD;
+}
+
+/**
+ * No ".pbf" suffix on purpose — Iris (backend router) doesn't match a
+ * literal suffix glued onto a typed path param in the same segment, so
+ * `{y}.pbf` 404s on every request. Verified directly against the deployed
+ * Iris version. MapLibre doesn't need the extension; it reads the
+ * Content-Type response header instead.
+ */
 export function habitatSectorTileUrl(sectorId: number): string {
-  return `${serverUrl}/habitat/sectors/${sectorId}/tiles/{z}/{x}/{y}.pbf`;
+  return `${serverUrl}/habitat/sectors/${sectorId}/tiles/{z}/{x}/{y}`;
 }
 
 export function habitatSectorTileJsonUrl(sectorId: number): string {
   return `${serverUrl}/habitat/sectors/${sectorId}/tiles.json`;
+}
+
+/**
+ * Nationwide tile URL (no sector scoping) — backend requires PostGIS to be
+ * ready (returns 503 otherwise). Not wired into the map yet; the product
+ * flow still picks a quartier first. Exists so nationwide cadastre browsing
+ * doesn't need another migration later.
+ */
+export function habitatNationwideTileUrl(): string {
+  return `${serverUrl}/habitat/tiles/{z}/{x}/{y}`;
 }
 
 export type HabitatTileJson = {
@@ -29,6 +73,8 @@ export type HabitatTileJson = {
   maxzoom: number;
   bounds: [number, number, number, number];
   center?: [number, number, number];
+  /** Plot count in sector (from server bounds query). */
+  plot_count?: number;
   tiles: string[];
   vector_layers: Array<{
     id: string;

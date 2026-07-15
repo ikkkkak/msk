@@ -9,12 +9,13 @@ import {
   Animated,
   Easing,
 } from "react-native";
-import MapView, { Region } from "react-native-maps";
+import MapView, { Region, UrlTile, type MapPressEvent } from "react-native-maps";
 import { useTranslation } from "react-i18next";
 import type {
   HabitatPlan,
   HabitatPlot,
   HabitatSector,
+  HabitatSubSector,
   HabitatMapViewLevel,
 } from "../../types/habitat";
 import { getMapProvider, resolveNativeMapType } from "../../utils/mapProvider";
@@ -26,16 +27,39 @@ import {
   resolveSelectedPlotCoordinate,
   HABITAT_PLOT_PREVIEW_HEIGHT,
 } from "./HabitatPlotMapCallout";
+import {
+  HabitatLandMapCalloutOverlay,
+  resolveLandmarkCoordinate,
+} from "./HabitatLandMapCallout";
+import { HabitatLandForSaleLayer } from "./HabitatLandForSaleLayer";
+import type { MapLandmarkRecord } from "../../utils/landmarkMapMarkers";
 import { MapToolbar } from "../map/MapToolbar";
 import type { PlotShapeDescriptor } from "../../utils/habitatPlotGeometryCache";
 import {
   USE_HABITAT_VECTOR_TILES,
   canUseHabitatVectorTiles,
 } from "../../utils/habitatVectorTiles";
-import { warnIfMapLibreNativeMissing } from "../../utils/habitatMapLibreNative";
+import {
+  USE_HABITAT_RASTER_OVERLAY,
+  HABITAT_RASTER_TILE_SIZE,
+  habitatSectorRasterTileUrl,
+} from "../../utils/habitatRasterOverlay";
+import { habitatApi } from "../../services/habitatApi";
+import { setCadastreGpuMapActive, isCadastreGpuMapActive } from "../../utils/habitatCadastreRenderer";
+import {
+  canAttemptMapLibreModuleLoad,
+  isMapLibreNativeAvailable,
+  resetMapLibreSessionGate,
+  warnIfMapLibreNativeMissing,
+} from "../../utils/habitatMapLibreNative";
 import type { CadastreMapHandle } from "../../utils/habitatCadastreMapRef";
 import type { ComponentType } from "react";
 import type { HabitatMapLibreCadastreProps } from "./HabitatMapLibreCadastre";
+import { theme } from "../../theme";
+import { USE_HABITAT_MAPLIBRE_GEOJSON } from "../../utils/habitatMapLibreGeoJSON";
+import { HabitatMapLibreGeoJSON } from "./HabitatMapLibreGeoJSON";
+
+const ACCENT = theme["color-temporary-primary"];
 
 const PLOT_LOADING_DELAY_MS = 160;
 
@@ -43,7 +67,12 @@ type DistrictFallback = {
   name: string;
   coordinates: Array<{ latitude: number; longitude: number }>;
 };
-type MapType = "standard" | "satellite";
+type MapType = "standard" | "satellite" | "sentinel";
+/** react-native-maps (legacy fallback) has no custom raster-style support — sentinel maps to satellite there. */
+type LegacyMapType = "standard" | "satellite";
+function toLegacyMapType(mapType: MapType): LegacyMapType {
+  return mapType === "standard" ? "standard" : "satellite";
+}
 
 type Props = {
   mapRef: React.RefObject<CadastreMapHandle | null>;
@@ -58,6 +87,9 @@ type Props = {
   selectedPlanId: number | null;
   selectedSectorId: number | null;
   selectedPlotId: number | null;
+  subSectors?: HabitatSubSector[];
+  selectedSubSectorId?: number | null;
+  onSubSectorPress?: (subSectorId: number) => void;
   districtFallback?: DistrictFallback[];
   loadingPlots?: boolean;
   mapNavigating?: boolean;
@@ -65,7 +97,11 @@ type Props = {
   plotsLoadedCount?: number;
   plotsDrawnCount?: number;
   sectorPlotTotal?: number;
+  plotsGeometryReady?: boolean;
+  plotsRevealReady?: boolean;
+  plotsViewportCapped?: boolean;
   plansLoading?: boolean;
+  sectorsLoading?: boolean;
   plansError?: boolean;
   onRegionChangeComplete: (region: Region) => void;
   onRegionChange?: () => void;
@@ -80,6 +116,16 @@ type Props = {
   onPlotClose?: () => void;
   onPlotViewAllDetails?: (plot: HabitatPlot) => void;
   selectedPlot?: HabitatPlot | null;
+  /** Verified land listings — always visible on map, independent of cadastre filter. */
+  landsForSale?: MapLandmarkRecord[];
+  selectedLand?: MapLandmarkRecord | null;
+  onLandPress?: (landmark: MapLandmarkRecord) => void;
+  onLandClusterPress?: (cluster: import("../../utils/landmarkMapClustering").LandMapCluster) => void;
+  onLandClose?: () => void;
+  onLandViewDetails?: (landmark: MapLandmarkRecord) => void;
+  showLandPanel?: boolean;
+  landPinRestoreGeneration?: number;
+  landPanelDismissRef?: React.MutableRefObject<(() => void) | null>;
 };
 
 export function HabitatCadastreMap({
@@ -95,6 +141,9 @@ export function HabitatCadastreMap({
   selectedPlanId,
   selectedSectorId,
   selectedPlotId,
+  subSectors = [],
+  selectedSubSectorId = null,
+  onSubSectorPress,
   districtFallback = [],
   loadingPlots,
   mapNavigating = false,
@@ -102,7 +151,11 @@ export function HabitatCadastreMap({
   plotsLoadedCount = 0,
   plotsDrawnCount = 0,
   sectorPlotTotal = 0,
+  plotsGeometryReady = true,
+  plotsRevealReady = true,
+  plotsViewportCapped = false,
   plansLoading,
+  sectorsLoading = false,
   plansError,
   onRegionChange,
   onRegionChangeComplete,
@@ -117,60 +170,156 @@ export function HabitatCadastreMap({
   onPlotClose,
   onPlotViewAllDetails,
   selectedPlot = null,
+  landsForSale = [],
+  selectedLand = null,
+  onLandPress,
+  onLandClusterPress,
+  onLandClose,
+  onLandViewDetails,
+  showLandPanel = false,
+  landPinRestoreGeneration = 0,
+  landPanelDismissRef,
 }: Props) {
   const { t } = useTranslation();
   const [localMapType, setLocalMapType] = useState<MapType>(mapTypeProp);
   const [showPlotLoading, setShowPlotLoading] = useState(false);
   const plotCalloutSyncRef = useRef<(() => void) | null>(null);
+  const plotCalloutIdleSyncRef = useRef<(() => void) | null>(null);
+  const landCalloutSyncRef = useRef<(() => void) | null>(null);
+  const landCalloutIdleSyncRef = useRef<(() => void) | null>(null);
   const navPulse = useRef(new Animated.Value(0)).current;
   const mapType = onMapTypeChange ? mapTypeProp : localMapType;
   const setMapType = onMapTypeChange ?? setLocalMapType;
-  const displayMapType = resolveNativeMapType(mapType);
+  // Native map type directly — Apple Maps (iOS) and Google Maps (Android)
+  // both render this mapType prop natively (fast, no extra tile-fetch hop);
+  // no MapTiler/UrlTile basemap override on either platform for this map.
+  const nativeMapType = useMemo(
+    () => resolveNativeMapType(toLegacyMapType(mapType)),
+    [mapType],
+  );
   const plotOpen = selectedPlot != null;
+  const landOpen = selectedLand != null;
 
   const plotCoordinate = useMemo(
     () => resolveSelectedPlotCoordinate(selectedPlot),
     [selectedPlot],
   );
 
+  const landCoordinate = useMemo(
+    () => resolveLandmarkCoordinate(selectedLand),
+    [selectedLand],
+  );
+
+  const resolvedMapRegion = mapRegion ?? initialRegion;
+
   const cadastreMapRef = mapRef;
-  const useMapLibre = canUseHabitatVectorTiles();
+  const [mapLibreFailed, setMapLibreFailed] = useState(false);
   const [MapLibreCadastre, setMapLibreCadastre] = useState<
     ComponentType<HabitatMapLibreCadastreProps> | null
   >(null);
+  /** GPU path: vector tiles still downloading/rendering for the pinned quartier. */
+  const [gpuTilesLoading, setGpuTilesLoading] = useState(false);
+  /** True when plot polygons are drawn externally (GPU tiles or raster overlay) — this hook's own viewport-geometry pipeline is unused either way. */
+  const plotsRenderedExternally =
+    isCadastreGpuMapActive() || USE_HABITAT_RASTER_OVERLAY;
+
+  // Native map (Apple Maps/iOS, Google Maps/Android) with its own default
+  // imagery is the ONLY supported rendering path — USE_HABITAT_VECTOR_TILES
+  // is force-disabled (see habitatVectorTiles.ts), so useMapLibre is always
+  // false here and MapLibreCadastre never mounts. This is a deliberate,
+  // repeated product decision: do not re-enable without explicit direction.
+  // Known trade-off accepted by that decision: the server-rendered raster
+  // overlay supplying plot boundaries can briefly go blank mid-zoom while a
+  // new bitmap tile loads (no crossfade) — that's a raster-tile limitation,
+  // not a bug, and fixing it for real means MapLibre's GPU vector path,
+  // which was explicitly rejected in favor of native provider imagery.
+  const useMapLibre = USE_HABITAT_VECTOR_TILES && !mapLibreFailed;
+  const mapLibreNativeReady = useMapLibre && isMapLibreNativeAvailable();
+  const showMapLibre =
+    useMapLibre && MapLibreCadastre != null && !mapLibreFailed;
+  const mapLibreBooting =
+    mapLibreNativeReady && MapLibreCadastre == null && !mapLibreFailed;
 
   useEffect(() => {
-    warnIfMapLibreNativeMissing(USE_HABITAT_VECTOR_TILES);
+    setCadastreGpuMapActive(showMapLibre);
+    if (!showMapLibre) setGpuTilesLoading(false);
+    return () => setCadastreGpuMapActive(false);
+  }, [showMapLibre]);
+
+  useEffect(() => {
+    if (__DEV__) {
+      warnIfMapLibreNativeMissing(USE_HABITAT_VECTOR_TILES);
+    }
   }, []);
 
   useEffect(() => {
-    if (!useMapLibre) {
+    // canAttemptMapLibreModuleLoad() must run BEFORE the dynamic import below,
+    // not just before mounting the component — in Expo Go, merely evaluating
+    // @maplibre/maplibre-react-native's JS module can hard-crash the app
+    // (native module lookups at import time), so this path must never
+    // attempt the import at all there. Moot while USE_HABITAT_VECTOR_TILES
+    // is force-disabled (useMapLibre is always false, so this bails out on
+    // the first condition below), but kept as defense in depth in case that
+    // ever changes.
+    if (
+      !useMapLibre ||
+      !USE_HABITAT_VECTOR_TILES ||
+      !canAttemptMapLibreModuleLoad()
+    ) {
       setMapLibreCadastre(null);
       return;
     }
     let cancelled = false;
-    void Promise.resolve()
-      .then(() => require("./HabitatMapLibreCadastre") as typeof import("./HabitatMapLibreCadastre"))
+    void import("./HabitatMapLibreCadastre")
       .then((mod) => {
-        if (!cancelled) setMapLibreCadastre(() => mod.HabitatMapLibreCadastre);
+        if (!cancelled) {
+          resetMapLibreSessionGate();
+          setMapLibreCadastre(() => mod.HabitatMapLibreCadastre);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setMapLibreCadastre(null);
+          setMapLibreFailed(true);
+        }
+        console.warn(
+          "[HabitatCadastre] MapLibre module load failed — using react-native-maps",
+          err instanceof Error ? err.message : err,
+        );
       });
     return () => {
       cancelled = true;
     };
-  }, [useMapLibre]);
+  }, []);
+
+  const handleMapLibreError = useCallback((error: Error) => {
+    const { markMapLibreNativeUnavailable } =
+      require("../../utils/habitatMapLibreNative") as typeof import("../../utils/habitatMapLibreNative");
+    markMapLibreNativeUnavailable(error.message);
+    setMapLibreFailed(true);
+    setMapLibreCadastre(null);
+  }, []);
 
   const handleRegionChange = useCallback(() => {
     plotCalloutSyncRef.current?.();
+    landCalloutSyncRef.current?.();
     onRegionChange?.();
   }, [onRegionChange]);
 
   const handleRegionChangeComplete = useCallback(
     (region: Region) => {
+      plotCalloutIdleSyncRef.current?.();
+      landCalloutIdleSyncRef.current?.();
       plotCalloutSyncRef.current?.();
+      landCalloutSyncRef.current?.();
       onRegionChangeComplete(region);
     },
     [onRegionChangeComplete],
   );
+
+  const handlePlotPinPress = useCallback(() => {
+    if (selectedPlot) onPlotPress(selectedPlot);
+  }, [onPlotPress, selectedPlot]);
 
   const handlePlotClose = useCallback(() => {
     onPlotClose?.();
@@ -181,34 +330,171 @@ export function HabitatCadastreMap({
       handlePlotClose();
       return;
     }
+    if (landOpen) {
+      if (landPanelDismissRef?.current) {
+        landPanelDismissRef.current();
+      } else {
+        onLandClose?.();
+      }
+      return;
+    }
     onMapBackgroundPress?.();
-  }, [plotOpen, onMapBackgroundPress, handlePlotClose]);
+  }, [
+    plotOpen,
+    landOpen,
+    handlePlotClose,
+    landPanelDismissRef,
+    onLandClose,
+    onMapBackgroundPress,
+  ]);
+
+  /**
+   * Raster overlay has no per-plot press events (it's a flat image) — a tap
+   * on the native map resolves to a plot via server-side point-in-polygon
+   * lookup instead. Passes a minimal stub to onPlotPress; the existing
+   * selectPlot flow (useHabitatCadastre.ts) already fetches full plot
+   * details whenever plot.id is set, same as every other entry point.
+   */
+  const handleRasterMapPress = useCallback(
+    (event: MapPressEvent) => {
+      if (plotOpen || landOpen) {
+        handleMapPress();
+        return;
+      }
+      if (
+        !USE_HABITAT_RASTER_OVERLAY ||
+        selectedSectorId == null ||
+        mapNavigating
+      ) {
+        handleMapPress();
+        return;
+      }
+      const { latitude, longitude } = event.nativeEvent.coordinate;
+      habitatApi
+        .getPlotAtPoint(selectedSectorId, latitude, longitude)
+        .then((plotId) => {
+          if (plotId) {
+            onPlotPress({
+              id: plotId,
+              plan_id: selectedPlanId ?? 0,
+              sector_id: selectedSectorId,
+              plot_number: "",
+            });
+          } else {
+            handleMapPress();
+          }
+        })
+        .catch(() => handleMapPress());
+    },
+    [
+      plotOpen,
+      landOpen,
+      selectedSectorId,
+      selectedPlanId,
+      mapNavigating,
+      onPlotPress,
+      handleMapPress,
+    ],
+  );
 
   const levelHint = (() => {
-    if (plotOpen) return null;
-    if (selectedSectorId != null && loadingPlots && plotsLoadedCount === 0) {
-      const pending = sectorPlotTotal > 0 ? sectorPlotTotal : null;
-      return pending
-        ? t(
-            "habitatCadastre.levelPlotsLoading",
-            "Loading all {{count}} plots…",
-            { count: pending },
-          )
-        : t("habitatCadastre.levelPlotsLoadingGeneric", "Loading all plots…");
+    if (plotOpen || landOpen) return null;
+    if (landsForSale.length > 0 && selectedSectorId == null) {
+      return t(
+        "landmark.map.landsForSaleCount",
+        "{{count}} lands for sale on map",
+        { count: landsForSale.length },
+      );
     }
-    if (selectedSectorId != null && plotsLoadedCount > 0) {
+    if (selectedSectorId != null && isCadastreGpuMapActive()) {
       const total = sectorPlotTotal || plotsLoadedCount;
-      if (USE_HABITAT_VECTOR_TILES && useMapLibre) {
+      if (total > 0) {
         return t(
           "habitatCadastre.levelPlotsVectorTiles",
           "{{count}} plots — GPU vector tiles",
           { count: total },
         );
       }
+    }
+    if (
+      selectedSectorId != null &&
+      USE_HABITAT_RASTER_OVERLAY &&
+      !isCadastreGpuMapActive()
+    ) {
+      const total = sectorPlotTotal || plotsLoadedCount;
+      if (total > 0) {
+        return t("habitatCadastre.levelPlotsCount", "{{count}} plots loaded", {
+          count: total,
+        });
+      }
+    }
+    if (
+      selectedSectorId != null &&
+      !plotsRenderedExternally &&
+      !plotsGeometryReady &&
+      plotsLoadedCount > 0
+    ) {
+      return t(
+        "habitatCadastre.levelPlotsViewportLoading",
+        "Loading visible plots…",
+      );
+    }
+    if (
+      selectedSectorId != null &&
+      loadingPlots &&
+      plotsLoadedCount === 0 &&
+      !plotsRenderedExternally
+    ) {
+      const pending = sectorPlotTotal > 0 ? sectorPlotTotal : null;
+      return pending
+        ? t(
+            "habitatCadastre.levelPlotsMetadataLoading",
+            "Loading {{count}} plot records…",
+            { count: pending },
+          )
+        : t("habitatCadastre.levelPlotsLoadingGeneric", "Loading all plots…");
+    }
+    if (
+      selectedSectorId != null &&
+      plotsViewportCapped &&
+      plotsGeometryReady &&
+      plotsDrawnCount > 0
+    ) {
+      const total = sectorPlotTotal || plotsLoadedCount;
+      return t(
+        "habitatCadastre.levelPlotsRange",
+        "{{drawn}} / {{total}} plots",
+        { drawn: plotsDrawnCount, total },
+      );
+    }
+    if (selectedSectorId != null && plotsGeometryReady && plotsDrawnCount > 0) {
+      const total = sectorPlotTotal || plotsLoadedCount;
+      if (plotsViewportCapped) {
+        return t(
+          "habitatCadastre.levelPlotsRange",
+          "{{drawn}} / {{total}} plots",
+          { drawn: plotsDrawnCount, total },
+        );
+      }
+      return t(
+        "habitatCadastre.levelPlotsViewportCount",
+        "{{count}} plots in view",
+        { count: plotsDrawnCount },
+      );
+    }
+    if (selectedSectorId != null && plotsLoadedCount > 0) {
+      const total = sectorPlotTotal || plotsLoadedCount;
       return t(
         "habitatCadastre.levelPlotsCount",
         "{{count}} plots loaded",
         { count: total },
+      );
+    }
+    if (viewLevel === "sub_sectors" && subSectors.length > 0) {
+      return t(
+        "habitatCadastre.levelSubSectors",
+        "{{count}} sub-areas — pick one",
+        { count: subSectors.length },
       );
     }
     if (viewLevel === "sectors") {
@@ -241,7 +527,68 @@ export function HabitatCadastreMap({
     return null;
   })();
 
-  const loadingRequested = (plansLoading || loadingPlots) && !plotOpen;
+  const geometryPreparing =
+    selectedSectorId != null &&
+    !plotsRenderedExternally &&
+    !plotsGeometryReady &&
+    !loadingPlots;
+
+  const loadingPlan =
+    !plotOpen &&
+    !landOpen &&
+    (plansLoading ||
+      (mapNavigating && selectedPlanId != null && selectedSectorId == null) ||
+      (sectorsLoading && selectedPlanId != null && selectedSectorId == null));
+
+  /** GPU path: tiles for the pinned quartier are still downloading/rendering. */
+  const loadingQuartierGpu =
+    isCadastreGpuMapActive() && selectedSectorId != null && gpuTilesLoading;
+
+  const loadingQuartier =
+    ((plansLoading || loadingPlots || geometryPreparing) &&
+      !plotsRenderedExternally &&
+      !plotOpen &&
+      !landOpen &&
+      !loadingPlan) ||
+    (loadingQuartierGpu && !plotOpen && !landOpen && !loadingPlan);
+
+  const loadingMessage = (() => {
+    if (loadingPlan) {
+      if (plansLoading) {
+        return t("habitatCadastre.gettingPlan", "We're getting your plan…");
+      }
+      if (sectorsLoading) {
+        return t(
+          "habitatCadastre.loadingPlanAreas",
+          "Loading quartiers for this zone…",
+        );
+      }
+      return t("habitatCadastre.gettingPlan", "We're getting your plan…");
+    }
+    if (loadingQuartierGpu) {
+      return t("habitatCadastre.gettingPlan", "We're getting your plan…");
+    }
+    if (geometryPreparing) {
+      return t(
+        "habitatCadastre.levelPlotsViewportLoading",
+        "Loading visible plots…",
+      );
+    }
+    if (loadingPlots && selectedSectorId != null) {
+      const pending = sectorPlotTotal > 0 ? sectorPlotTotal : null;
+      return pending
+        ? t(
+            "habitatCadastre.levelPlotsMetadataLoading",
+            "Loading {{count}} plot records…",
+            { count: pending },
+          )
+        : t("habitatCadastre.levelPlotsLoadingGeneric", "Loading all plots…");
+    }
+    return null;
+  })();
+
+  const loadingRequested = loadingPlan || loadingQuartier;
+  const loadingDelayMs = loadingPlan ? 0 : PLOT_LOADING_DELAY_MS;
 
   useEffect(() => {
     if (!loadingRequested) {
@@ -250,10 +597,10 @@ export function HabitatCadastreMap({
     }
     const timer = setTimeout(
       () => setShowPlotLoading(true),
-      PLOT_LOADING_DELAY_MS,
+      loadingDelayMs,
     );
     return () => clearTimeout(timer);
-  }, [loadingRequested]);
+  }, [loadingRequested, loadingDelayMs]);
 
   useEffect(() => {
     if (!mapNavigating) {
@@ -285,38 +632,68 @@ export function HabitatCadastreMap({
     outputRange: [0.45, 1],
   });
 
+  // MapLibre GL + GeoJSON client-side rendering (no tile server)
+  if (USE_HABITAT_MAPLIBRE_GEOJSON) {
+    return (
+      <HabitatMapLibreGeoJSON
+        mapRef={mapRef}
+        initialRegion={initialRegion}
+        plots={plots}
+        selectedPlotId={selectedPlotId}
+        onPlotPress={onPlotPress}
+        loadingPlots={loadingPlots}
+      />
+    );
+  }
+
   return (
     <View style={styles.wrap}>
-      {useMapLibre && MapLibreCadastre ? (
-        <MapLibreCadastre
-          mapRef={cadastreMapRef}
-          initialRegion={initialRegion}
-          mapRegion={mapRegion}
-          mapType={mapType}
-          viewLevel={viewLevel}
-          plans={plans}
-          sectors={sectors}
-          selectedPlanId={selectedPlanId}
-          selectedSectorId={selectedSectorId}
-          selectedPlotId={selectedPlotId}
-          selectedPlot={selectedPlot}
-          districtFallback={districtFallback}
-          mapZoom={mapZoom}
-          onRegionChange={handleRegionChange}
-          onRegionChangeComplete={handleRegionChangeComplete}
-          onPlotPress={onPlotPress}
-          onMapBackgroundPress={handleMapPress}
-        />
+      {showMapLibre ? (
+        <MapErrorBoundary onError={handleMapLibreError} fallback={null}>
+          <MapLibreCadastre
+            mapRef={cadastreMapRef}
+            initialRegion={initialRegion}
+            mapRegion={resolvedMapRegion}
+            mapType={mapType}
+            viewLevel={viewLevel}
+            plans={plans}
+            sectors={sectors}
+            selectedPlanId={selectedPlanId}
+            selectedSectorId={selectedSectorId}
+            selectedPlotId={selectedPlotId}
+            selectedPlot={selectedPlot}
+            subSectors={subSectors}
+            selectedSubSectorId={selectedSubSectorId}
+            onSubSectorPress={onSubSectorPress}
+            districtFallback={districtFallback}
+            mapZoom={mapZoom}
+            onRegionChange={handleRegionChange}
+            onRegionChangeComplete={handleRegionChangeComplete}
+            onPlotPress={onPlotPress}
+            onMapBackgroundPress={handleMapPress}
+            landsForSale={landsForSale}
+            selectedLandId={selectedLand?.id ?? null}
+            showLandPanel={showLandPanel}
+            onLandPress={onLandPress}
+            onLandClusterPress={onLandClusterPress}
+            loadingPlots={loadingPlots}
+            onTilesLoadingChange={setGpuTilesLoading}
+          />
+        </MapErrorBoundary>
+      ) : mapLibreBooting ? (
+        <View style={styles.mapBoot}>
+          <ActivityIndicator size="large" color={ACCENT} />
+        </View>
       ) : (
         <MapView
           ref={mapRef as React.RefObject<MapView | null>}
           style={StyleSheet.absoluteFill}
           provider={getMapProvider()}
           initialRegion={initialRegion}
-          mapType={displayMapType}
+          mapType={nativeMapType}
           onRegionChange={handleRegionChange}
           onRegionChangeComplete={handleRegionChangeComplete}
-          onPress={handleMapPress}
+          onPress={handleRasterMapPress}
           showsUserLocation={false}
           showsMyLocationButton={false}
           showsCompass={false}
@@ -326,7 +703,34 @@ export function HabitatCadastreMap({
           rotateEnabled={false}
           pitchEnabled={false}
           toolbarEnabled={false}
+          // Must not exceed the raster overlay's maximumZ below (and the
+          // server's habitatPrewarmMaxZoom) — past that zoom no tile exists
+          // for the SDK to fetch, so it stretches the last-loaded bitmap to
+          // fill the more-zoomed-in viewport instead. That overzoom stretch
+          // is what reads as "plot shapes deform on pinch zoom": the plot
+          // coordinates never move, the bitmap they're baked into is just
+          // being scaled past its native resolution. Capping the gesture
+          // here makes that state unreachable rather than just unlikely.
+          maxZoomLevel={USE_HABITAT_RASTER_OVERLAY ? 20 : 21}
         >
+          {USE_HABITAT_RASTER_OVERLAY && selectedSectorId != null ? (
+            <UrlTile
+              // Force a full remount (not just a prop update) on quartier
+              // switch — react-native-maps' UrlTile wraps a native tile
+              // overlay layer that isn't guaranteed to re-fetch cleanly when
+              // urlTemplate changes on an already-mounted instance.
+              key={`habitat-raster-${selectedSectorId}`}
+              urlTemplate={habitatSectorRasterTileUrl(selectedSectorId)}
+              zIndex={5}
+              maximumZ={20}
+              // @2x retina tiles: the server renders 512px bitmaps (scale=2 in
+              // the URL) while keeping standard 256-space {z}/{x}/{y}
+              // addressing, so tileSize must be 512 for the map to treat each
+              // bitmap as one tile. Keeps plot edges crisp on 2x/3x screens and
+              // through the live pinch-zoom scale, instead of upscaling 256px.
+              tileSize={HABITAT_RASTER_TILE_SIZE}
+            />
+          ) : null}
           <MapErrorBoundary>
             <HabitatMapLayers
               plans={plans}
@@ -337,17 +741,43 @@ export function HabitatCadastreMap({
               selectedPlanId={selectedPlanId}
               selectedSectorId={selectedSectorId}
               selectedPlotId={selectedPlotId}
+              subSectors={subSectors}
+              selectedSubSectorId={selectedSubSectorId}
               districtFallback={districtFallback}
               onPlanPress={onPlanPress}
               onSectorPress={onSectorPress}
+              onSubSectorPress={onSubSectorPress}
               onPlotPress={onPlotPress}
               mapZoom={mapZoom}
               mapLongitudeDelta={mapLongitudeDelta}
+              mapRegion={resolvedMapRegion}
               selectedPlot={selectedPlot}
+              mapNavigating={mapNavigating}
+              loadingPlots={loadingPlots}
+              plotsGeometryReady={plotsGeometryReady}
+              plotsRevealReady={plotsRevealReady}
+              plotsRenderedExternally={USE_HABITAT_RASTER_OVERLAY}
             />
           </MapErrorBoundary>
+          {landsForSale.length > 0 && onLandPress ? (
+            <MapErrorBoundary fallback={null}>
+              <HabitatLandForSaleLayer
+                landmarks={landsForSale}
+                mapRegion={resolvedMapRegion}
+                mapZoom={mapZoom}
+                selectedLandId={selectedLand?.id ?? null}
+                showLandPanel={showLandPanel}
+                pinRestoreGeneration={landPinRestoreGeneration}
+                onLandPress={onLandPress}
+                onClusterPress={onLandClusterPress}
+              />
+            </MapErrorBoundary>
+          ) : null}
           {plotCoordinate ? (
-            <HabitatPlotPinMarker coordinate={plotCoordinate} />
+            <HabitatPlotPinMarker
+              coordinate={plotCoordinate}
+              onPress={handlePlotPinPress}
+            />
           ) : null}
         </MapView>
       )}
@@ -358,12 +788,37 @@ export function HabitatCadastreMap({
           plot={selectedPlot}
           coordinate={plotCoordinate}
           regionSyncRef={plotCalloutSyncRef}
+          regionIdleSyncRef={plotCalloutIdleSyncRef}
           onClose={handlePlotClose}
           onViewAllDetails={onPlotViewAllDetails}
         />
       ) : null}
 
-      {!showPlotPanel ? (
+      {selectedLand && landCoordinate && !plotOpen ? (
+        <MapErrorBoundary
+          fallback={null}
+          onError={() => {
+            if (landPanelDismissRef?.current) {
+              landPanelDismissRef.current();
+            } else {
+              onLandClose?.();
+            }
+          }}
+        >
+          <HabitatLandMapCalloutOverlay
+            mapRef={cadastreMapRef}
+            landmark={selectedLand}
+            coordinate={landCoordinate}
+            regionSyncRef={landCalloutSyncRef}
+            regionIdleSyncRef={landCalloutIdleSyncRef}
+            dismissRef={landPanelDismissRef}
+            onClose={() => onLandClose?.()}
+            onViewDetails={onLandViewDetails}
+          />
+        </MapErrorBoundary>
+      ) : null}
+
+      {!showPlotPanel && !showLandPanel ? (
         <MapToolbar
           mapRef={cadastreMapRef}
           region={mapRegion ?? initialRegion}
@@ -379,9 +834,19 @@ export function HabitatCadastreMap({
         </View>
       ) : null}
 
-      {showPlotLoading ? (
+      {plansLoading && plans.length === 0 ? (
+        <View style={styles.mapBootOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color={ACCENT} />
+          <Text style={styles.mapBootText}>
+            {t("habitatCadastre.gettingPlan", "We're getting your plan…")}
+          </Text>
+        </View>
+      ) : null}
+
+      {showPlotLoading && loadingMessage ? (
         <View style={styles.loadingChip} pointerEvents="none">
-          <ActivityIndicator size="small" color="#717171" />
+          <ActivityIndicator size="small" color={ACCENT} />
+          <Text style={styles.loadingChipText}>{loadingMessage}</Text>
         </View>
       ) : null}
 
@@ -410,8 +875,40 @@ export function HabitatCadastreMap({
   );
 }
 
+/** Soft, border-free elevation shared by every floating pill on this screen — Airbnb-style shadow-only cards instead of hairline borders. */
+const pillShadow = Platform.select({
+  ios: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+  },
+  android: { elevation: 6 },
+});
+
 const styles = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: "#E8ECF0" },
+  wrap: { flex: 1, backgroundColor: "#EBEEF1" },
+  mapBoot: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#EBEEF1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  mapBootOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(235, 238, 241, 0.94)",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 30,
+    gap: 14,
+    paddingHorizontal: 32,
+  },
+  mapBootText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#222222",
+    textAlign: "center",
+  },
   navTrack: {
     position: "absolute",
     top: 0,
@@ -429,36 +926,36 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 72,
     alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
     backgroundColor: "#FFFFFF",
-    padding: 10,
-    borderRadius: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#E5E7EB",
-    ...Platform.select({
-      ios: {
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-      },
-      android: { elevation: 2 },
-    }),
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: 24,
+    maxWidth: "88%",
+    ...pillShadow,
+  },
+  loadingChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#222222",
+    flexShrink: 1,
   },
   levelChip: {
     position: "absolute",
     bottom: 16,
     alignSelf: "center",
-    backgroundColor: "rgba(255,255,255,0.94)",
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#E5E7EB",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    ...pillShadow,
   },
   levelText: {
-    color: "#374151",
+    color: "#222222",
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   banner: {
     position: "absolute",
@@ -466,16 +963,15 @@ const styles = StyleSheet.create({
     left: 16,
     right: 16,
     backgroundColor: "#FFFFFF",
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#E5E7EB",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+    ...pillShadow,
   },
   bannerText: {
-    color: "#374151",
+    color: "#222222",
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "600",
     textAlign: "center",
   },
 });

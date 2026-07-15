@@ -1,9 +1,9 @@
 /**
  * Map Provider Utility
  * Platform-specific map provider selection
- * 
- * iOS: Uses PROVIDER_DEFAULT (Apple Maps) - no API key needed
- * Android: Uses PROVIDER_GOOGLE - requires API key in app.json
+ *
+ * iOS: PROVIDER_DEFAULT (Apple Maps) — native standard / hybrid tiles
+ * Android: PROVIDER_GOOGLE shell + MapTiler UrlTile (see mapTilerAndroid.ts)
  */
 
 import { Platform } from 'react-native';

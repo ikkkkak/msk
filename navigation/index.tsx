@@ -139,6 +139,7 @@ import { PropertyReservationScreen } from "../screens/PropertyReservationScreen"
 import { ContactHostScreen } from "../screens/ContactHostScreen";
 import ReservationConfirmationScreen from "../screens/ReservationConfirmationScreen";
 import TripDetailsScreen from "../screens/TripDetailsScreen";
+import { OSMPlotMapScreen } from "../screens/OSMPlotMapScreen";
 
 import {
   House,
@@ -833,6 +834,11 @@ function RootNavigator() {
           <Stack.Screen
             name="PropertyAmenities"
             component={PropertyAmenitiesScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="OSMPlotMap"
+            component={OSMPlotMapScreen}
             options={{ headerShown: false }}
           />
           <Stack.Screen

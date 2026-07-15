@@ -582,6 +582,9 @@ import {
 import { pickImageNative, pickVideoNative } from "../utils/nativePhotoPicker";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import MapView, { Marker } from "react-native-maps";
+import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../components/map/PlatformMapTileLayer";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
@@ -1416,15 +1419,17 @@ export const EditLandmarkScreen: React.FC = () => {
                 <View style={S.mapWrap}>
                   <MapView
                     ref={mapRef}
+                    provider={getMapProvider()}
                     style={S.map}
                     initialRegion={initialRegion}
                     onPress={(e: any) => {
                       const c = e.nativeEvent.coordinate;
                       if (points.length < 4) setPoints((p) => [...p, c]);
                     }}
-                    mapType="satellite"
+                    mapType={getPlatformMapViewConfig("satellite").mapType}
                     showsUserLocation
                   >
+                    <PlatformMapTileLayer mapStyle="satellite" />
                     {points.map((p, i) => (
                       <Marker key={i} coordinate={p}>
                         <View style={S.pin}>

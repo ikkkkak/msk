@@ -1969,6 +1969,11 @@
       "title": "Aucun terrain disponible",
       "subtitle": "Les terrains apparaîtront ici lorsqu'ils seront disponibles."
     },
+    "map": {
+      "viewDetails": "Voir l'annonce",
+      "landsForSaleCount": "{{count}} terrains à vendre sur la carte",
+      "sides": "Côtés"
+    },
     "error": {
       "loadFailed": "Échec du chargement des terrains"
     },
@@ -5398,12 +5403,20 @@
     "levelPlotsCount": "{{count}} parcelles chargées",
     "levelPlotsLoading": "Chargement des {{count}} parcelles…",
     "levelPlotsLoadingGeneric": "Chargement de toutes les parcelles…",
+    "levelPlotsMetadataLoading": "Chargement de {{count}} fiches parcelles…",
+    "levelPlotsViewportLoading": "Chargement des parcelles visibles…",
+    "levelPlotsViewportCount": "{{count}} parcelles visibles",
+    "levelPlotsPreparing": "Préparation de {{count}} parcelles…",
     "levelPlotsLoaded": "{{loaded}} parcelles chargées · {{drawn}} sur la carte (données complètes)",
     "levelPlotsRange": "{{drawn}} / {{total}} parcelles",
+    "levelPlotsVectorTiles": "{{count}} parcelles — tuiles vectorielles GPU",
+    "largeQuartierNeedsDevClient": "Cette zone compte de nombreuses parcelles. Recompilez l'app (npx expo run:android) pour la carte GPU complète — Expo Go ne peut pas tout afficher.",
     "errorLoadSubdivision": "Impossible de charger les données cadastrales",
     "emptyPlotsForArea": "Aucune parcelle pour ce secteur",
     "emptyAreasForZone": "Aucun secteur pour cette zone",
     "loadingZones": "Chargement des zones…",
+    "gettingPlan": "Nous récupérons votre plan…",
+    "loadingPlanAreas": "Chargement des quartiers pour cette zone…",
     "loadingPlotsInArea": "Chargement des parcelles…",
     "card": {
       "zone": "Zone",
@@ -5962,6 +5975,15 @@
       "tenure": "Régime",
       "tenureValue": "Bail 70 ans",
       "unfinished": "Non meublé"
+    },
+    "dgdpeVerification": {
+      "a11y": "Vérification des documents immobiliers par la DGDPE",
+      "eyebrow": "Vérification officielle du bien",
+      "title": "Contrôle documentaire DGDPE",
+      "verifiedLine": "Les documents de ce bien ont été vérifiés par la DGDPE (Direction Générale des Domaines et de la Conservation Foncière).",
+      "statusLabel": "Statut",
+      "statusConforme": "Conforme",
+      "footnote": "Les titres et documents fonciers soumis correspondent aux registres cadastraux officiels."
     },
     "trust": {
       "brokerDesc": "Licence professionnelle de courtier confirmée par Meskeny.",

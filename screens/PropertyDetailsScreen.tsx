@@ -22,7 +22,10 @@ import {
   useAmenities,
 } from "../hooks/queries/useCategories";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
-import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker } from "react-native-maps";
+import { getMapProvider } from "../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../components/map/PlatformMapTileLayer";
 import { LinearGradient } from "expo-linear-gradient";
 
 import { ModernImageCarousel } from "../components/ModernImageCarousel";
@@ -1553,9 +1556,9 @@ export const PropertyDetailsScreen = ({
             </Text>
             <View style={styles.mapContainer}>
               <MapView
-                provider={PROVIDER_GOOGLE}
+                provider={getMapProvider()}
                 style={styles.map}
-                mapType="standard"
+                mapType={getPlatformMapViewConfig("standard").mapType}
                 initialRegion={{
                   latitude: item.lat || 18.0735,
                   longitude: item.lng || -15.9582,
@@ -1581,6 +1584,7 @@ export const PropertyDetailsScreen = ({
                 maxZoomLevel={18}
                 minZoomLevel={10}
               >
+                <PlatformMapTileLayer mapStyle="standard" />
                 <Marker
                   coordinate={{
                     latitude: item.lat || 18.0735,

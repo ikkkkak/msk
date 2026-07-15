@@ -13,6 +13,9 @@ import {
   TouchableOpacity,
 } from "react-native";
 import MapView, { Marker, Polygon, Polyline } from "react-native-maps";
+import { getMapProvider } from "../../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../map/PlatformMapTileLayer";
 import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import {
   ArrowLeft,
@@ -359,12 +362,14 @@ export function LandmarkMapDetailLayout({
       <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
       <MapView
-        mapType="satellite"
+        provider={getMapProvider()}
+        mapType={getPlatformMapViewConfig("satellite").mapType}
         style={StyleSheet.absoluteFill}
         initialRegion={mapRegion}
         rotateEnabled={false}
         pitchEnabled={false}
       >
+        <PlatformMapTileLayer mapStyle="satellite" />
         {polygonRings.map((ring, idx) => (
           <Polygon
             key={`ring-${idx}`}

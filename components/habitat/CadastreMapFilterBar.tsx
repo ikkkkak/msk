@@ -282,6 +282,7 @@ import {
   MapTrifold,
   Buildings,
   Hash,
+  MapPin,
 } from "phosphor-react-native";
 import * as Haptics from "expo-haptics";
 import { useTranslation } from "react-i18next";
@@ -298,6 +299,10 @@ type Props = {
   onPlotSearch: () => void;
   plotSearching?: boolean;
   onClear: () => void;
+  /** Third dropdown, below the plot-number search — only rendered when the applied quartier actually has sub-sectors. */
+  subSectorAvailable?: boolean;
+  selectedSubSectorLabel?: string;
+  onOpenSubSector?: () => void;
   /** Collapsed chips while a plot callout is open. */
   compact?: boolean;
   /** Render inside SearchCadastreMapView top stack (no absolute positioning). */
@@ -397,6 +402,9 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
   onPlotSearch,
   plotSearching = false,
   onClear,
+  subSectorAvailable = false,
+  selectedSubSectorLabel,
+  onOpenSubSector,
   compact = false,
   embedded = false,
 }: Props) {
@@ -604,6 +612,36 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
           ) : null}
         </View>
       </View>
+
+      {subSectorAvailable && onOpenSubSector ? (
+        <Pressable
+          style={({ pressed }) => [
+            styles.subSectorChip,
+            selectedSubSectorLabel && styles.chipActive,
+            pressed && { opacity: 0.86 },
+          ]}
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            onOpenSubSector();
+          }}
+        >
+          <MapPin
+            size={14}
+            color={selectedSubSectorLabel ? "#1E3A5F" : "#6B7280"}
+            weight="duotone"
+          />
+          <View style={styles.chipTextWrap}>
+            <Text style={styles.chipLabel}>
+              {t("habitatCadastre.subSectorLabel", "Sub-area (optional)")}
+            </Text>
+            <Text style={styles.chipValue} numberOfLines={1}>
+              {selectedSubSectorLabel ||
+                t("habitatCadastre.allSubSectorsShort", "All")}
+            </Text>
+          </View>
+          <CaretDown size={12} color="#6B7280" weight="bold" />
+        </Pressable>
+      ) : null}
     </View>
   );
 
@@ -752,6 +790,17 @@ const styles = StyleSheet.create({
     borderColor: "#E5E7EB",
     paddingHorizontal: 8,
     paddingVertical: 8,
+  },
+  subSectorChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#F9FAFB",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#E5E7EB",
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    marginTop: 6,
   },
   chipActive: {
     backgroundColor: "#EFF6FF",

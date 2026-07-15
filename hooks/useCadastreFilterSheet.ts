@@ -7,11 +7,16 @@ import { useQuery } from "@tanstack/react-query";
 import type { BottomSheetModal } from "@gorhom/bottom-sheet";
 import type { CadastreMapHandle } from "../utils/habitatCadastreMapRef";
 import { habitatApi } from "../services/habitatApi";
-import type { HabitatPlan, HabitatPlot, HabitatSector } from "../types/habitat";
+import type {
+  HabitatPlan,
+  HabitatPlot,
+  HabitatSector,
+  HabitatSubSector,
+} from "../types/habitat";
 import type { useHabitatCadastre } from "./useHabitatCadastre";
 import { useDebouncedValue } from "./useDebouncedValue";
-import { matchesPlan, matchesSector } from "../utils/habitatSearch";
-import { logFilterCadastreApply } from "./useHabitatCadastre";
+import { matchesPlan, matchesSector, matchesSubSector } from "../utils/habitatSearch";
+import { logFilterCadastreApply, CADASTRE_LOG } from "./useHabitatCadastre";
 import { ingestPlotGeometryBatch } from "../utils/habitatPlotGeometryCache";
 import {
   formatAppliedCadastreLabel,
@@ -22,7 +27,7 @@ const SEARCH_DEBOUNCE_MS = 320;
 const SEARCH_MIN_LEN = 2;
 const MAX_SEARCH_ROWS = 40;
 
-type SheetStep = "main" | "zones" | "quartiers";
+type SheetStep = "main" | "zones" | "quartiers" | "subsectors";
 
 type DistrictFallback = {
   name: string;
@@ -34,6 +39,7 @@ type CadastreApi = ReturnType<typeof useHabitatCadastre>;
 export type UnifiedRow =
   | { kind: "plan"; plan: HabitatPlan }
   | { kind: "sector"; sector: HabitatSector; plan?: HabitatPlan }
+  | { kind: "sub_sector"; subSector: HabitatSubSector; sector?: HabitatSector }
   | { kind: "plot"; plot: HabitatPlot };
 
 export type CadastreFilterSheetRef = {
@@ -42,6 +48,8 @@ export type CadastreFilterSheetRef = {
   openZones: () => void;
   openQuartiers: () => void;
   openPlotSearch: () => void;
+  /** No-op if the applied sector has no sub-sectors. */
+  openSubSectors: () => void;
 };
 
 export type CadastreFilterSheetParams = {
@@ -65,6 +73,8 @@ export function useCadastreFilterSheet({
   const [step, setStep] = useState<SheetStep>("main");
   const [draftPlanId, setDraftPlanId] = useState<number | null>(null);
   const [draftSectorId, setDraftSectorId] = useState<number | null>(null);
+  const [draftSubSectorId, setDraftSubSectorId] = useState<number | null>(null);
+  const [draftSubSectors, setDraftSubSectors] = useState<HabitatSubSector[]>([]);
   const [listSearch, setListSearch] = useState("");
   const [query, setQuery] = useState("");
   const [sectorPlotNumber, setSectorPlotNumber] = useState("");
@@ -133,6 +143,13 @@ export function useCadastreFilterSheet({
         plan: cadastre.plans.find((p) => p.id === sector.plan_id),
       });
     }
+    for (const subSector of data.subSectors.slice(0, 12)) {
+      rows.push({
+        kind: "sub_sector",
+        subSector,
+        sector: subSector.sector,
+      });
+    }
     for (const plot of data.plots.slice(0, 12)) {
       rows.push({ kind: "plot", plot });
     }
@@ -158,6 +175,8 @@ export function useCadastreFilterSheet({
     setSectorPlotNumber("");
     setSectorPlotSearching(false);
     setSectorPlotError(null);
+    setDraftSubSectorId(null);
+    setDraftSubSectors([]);
   }, []);
 
   const presentSheet = useCallback(() => {
@@ -212,18 +231,6 @@ export function useCadastreFilterSheet({
     presentSheet();
   }, [cadastre.selectedPlanId, cadastre.selectedSectorId, presentSheet]);
 
-  useImperativeHandle(
-    imperativeRef,
-    () => ({
-      open: openFilter,
-      openWithPlan,
-      openZones,
-      openQuartiers,
-      openPlotSearch,
-    }),
-    [openFilter, openWithPlan, openZones, openQuartiers, openPlotSearch],
-  );
-
   const closeSheet = useCallback(() => {
     sheetRef.current?.dismiss();
   }, []);
@@ -245,36 +252,50 @@ export function useCadastreFilterSheet({
   }, [cadastre, getMapRef, dismissSheet]);
 
   const applySelection = useCallback(
-    async (planId: number, sectorId: number | null) => {
+    async (
+      planId: number,
+      sectorId: number | null,
+      subSectorId?: number | null,
+    ) => {
       dismissSheet();
       const mapRef = getMapRef();
       const plan = cadastre.plans.find((p) => p.id === planId);
-      if (sectorId != null) {
-        cadastre.prefetchSectorPlots(sectorId);
-        const sector = draftSectors.find((s) => s.id === sectorId);
-        logFilterCadastreApply(
-          plan
-            ? { id: plan.id, name: plan.name_ar || plan.name }
-            : { id: planId, name: String(planId) },
-          sector
-            ? { id: sector.id, name: sector.name_ar || sector.name }
-            : { id: sectorId, name: String(sectorId) },
-        );
-        await cadastre.applyCadastreFilter(
+      try {
+        if (sectorId != null) {
+          const sector = draftSectors.find((s) => s.id === sectorId);
+          logFilterCadastreApply(
+            plan
+              ? { id: plan.id, name: plan.name_ar || plan.name }
+              : { id: planId, name: String(planId) },
+            sector
+              ? { id: sector.id, name: sector.name_ar || sector.name }
+              : { id: sectorId, name: String(sectorId) },
+          );
+          await cadastre.applyCadastreFilter(
+            planId,
+            sectorId,
+            mapRef,
+            districtFallback,
+            { sectorHint: sector ?? undefined },
+          );
+          if (subSectorId != null) {
+            cadastre.selectSubSector(subSectorId, mapRef);
+          }
+        } else {
+          logFilterCadastreApply(
+            plan
+              ? { id: plan.id, name: plan.name_ar || plan.name }
+              : { id: planId, name: String(planId) },
+            null,
+          );
+          await cadastre.applyZoneOnly(planId, mapRef, districtFallback);
+        }
+      } catch (err) {
+        console.error(CADASTRE_LOG, "applySelection failed", {
           planId,
           sectorId,
-          mapRef,
-          districtFallback,
-          { sectorHint: sector ?? undefined },
-        );
-      } else {
-        logFilterCadastreApply(
-          plan
-            ? { id: plan.id, name: plan.name_ar || plan.name }
-            : { id: planId, name: String(planId) },
-          null,
-        );
-        await cadastre.applyZoneOnly(planId, mapRef, districtFallback);
+          err,
+        });
       }
     },
     [cadastre, getMapRef, districtFallback, draftSectors, dismissSheet],
@@ -284,11 +305,96 @@ export function useCadastreFilterSheet({
     (planId: number) => {
       setDraftPlanId(planId);
       setDraftSectorId(null);
+      setDraftSubSectorId(null);
+      setDraftSubSectors([]);
       setListSearch("");
       setStep("quartiers");
       void cadastre.applyZoneOnly(planId, getMapRef(), districtFallback);
     },
     [cadastre, getMapRef, districtFallback],
+  );
+
+  /**
+   * Tapping a quartier always applies immediately — sub-sector narrowing is
+   * never a forced detour before reaching the sector itself. Users who want
+   * to narrow down can do so afterward, either by tapping a sub-sector pin
+   * on the map or via openSubSectorsForAppliedSector below; everyone else
+   * proceeds with zero interruption, same as a sector with no sub-sectors.
+   */
+  const selectQuartierSector = useCallback(
+    async (planId: number, sector: HabitatSector) => {
+      setDraftSubSectorId(null);
+      setDraftSubSectors([]);
+      await applySelection(planId, sector.id);
+    },
+    [applySelection],
+  );
+
+  /**
+   * Optional, explicit entry point into the sub-sector list for a sector
+   * that's already applied — reachable from a secondary "Sub-area" row in
+   * the main step, the on-map filter bar's third chip, or the imperative
+   * ref, never forced. No-ops (doesn't even open the sheet) when the
+   * applied sector has no sub-sectors — callers should gate visibility on
+   * cadastre.subSectors.length themselves. Cheap: subSectors for the
+   * applied sector are already loaded reactively by useHabitatCadastre.
+   */
+  const openSubSectorsForAppliedSector = useCallback(() => {
+    if (cadastre.selectedSectorId == null || cadastre.subSectors.length === 0) {
+      return;
+    }
+    setDraftPlanId(cadastre.selectedPlanId);
+    setDraftSectorId(cadastre.selectedSectorId);
+    setDraftSubSectorId(cadastre.selectedSubSectorId);
+    setDraftSubSectors(cadastre.subSectors);
+    setListSearch("");
+    setStep("subsectors");
+    presentSheet();
+  }, [
+    cadastre.selectedPlanId,
+    cadastre.selectedSectorId,
+    cadastre.selectedSubSectorId,
+    cadastre.subSectors,
+    presentSheet,
+  ]);
+
+  useImperativeHandle(
+    imperativeRef,
+    () => ({
+      open: openFilter,
+      openWithPlan,
+      openZones,
+      openQuartiers,
+      openPlotSearch,
+      openSubSectors: openSubSectorsForAppliedSector,
+    }),
+    [
+      openFilter,
+      openWithPlan,
+      openZones,
+      openQuartiers,
+      openPlotSearch,
+      openSubSectorsForAppliedSector,
+    ],
+  );
+
+  /**
+   * subSectorId === null means "All sub-areas". The sector is already
+   * applied by the time this step is reachable, so this is a cheap direct
+   * map update (client-side filter + camera fit) — no need to re-run the
+   * whole applyCadastreFilter flow again.
+   */
+  const selectSubSectorRow = useCallback(
+    (subSectorId: number | null) => {
+      const mapRef = getMapRef();
+      if (subSectorId == null) {
+        cadastre.clearSubSectorSelection(mapRef);
+      } else {
+        cadastre.selectSubSector(subSectorId, mapRef);
+      }
+      dismissSheet();
+    },
+    [cadastre, getMapRef, dismissSheet],
   );
 
   const handleApplyMain = useCallback(() => {
@@ -312,6 +418,9 @@ export function useCadastreFilterSheet({
         mapRef,
         districtFallback,
       );
+      if (plot.sub_sector_id != null) {
+        cadastre.selectSubSector(plot.sub_sector_id, mapRef);
+      }
       let full = plot;
       if (!plot.geom_geojson && plot.id) {
         const detail = await habitatApi.getPlot(plot.id);
@@ -331,10 +440,21 @@ export function useCadastreFilterSheet({
       setSectorPlotError("select_sector_first");
       return;
     }
+    // Scope to whatever sub-sector is currently pinned on the map (from a
+    // pin tap or openSubSectorsForAppliedSector) — never required, just
+    // respected when present, same as the inline map search box.
+    const subSectorScope =
+      draftSectorId === cadastre.selectedSectorId
+        ? cadastre.selectedSubSectorId
+        : null;
     setSectorPlotSearching(true);
     setSectorPlotError(null);
     try {
-      const res = await habitatApi.lookupPlotInSector(draftSectorId, plotNumber);
+      const res = await habitatApi.lookupPlotInSector(
+        draftSectorId,
+        plotNumber,
+        subSectorScope,
+      );
       if (!res.plot) {
         setSectorPlotError("not_found");
         return;
@@ -343,7 +463,13 @@ export function useCadastreFilterSheet({
     } finally {
       setSectorPlotSearching(false);
     }
-  }, [sectorPlotNumber, draftSectorId, applyPlotResult]);
+  }, [
+    sectorPlotNumber,
+    draftSectorId,
+    cadastre.selectedSectorId,
+    cadastre.selectedSubSectorId,
+    applyPlotResult,
+  ]);
 
   const onSearchRowPress = useCallback(
     (row: UnifiedRow) => {
@@ -356,12 +482,33 @@ export function useCadastreFilterSheet({
         return;
       }
       if (row.kind === "sector") {
-        void applySelection(row.sector.plan_id, row.sector.id);
+        void selectQuartierSector(row.sector.plan_id, row.sector);
+        return;
+      }
+      if (row.kind === "sub_sector") {
+        const planId = row.sector?.plan_id;
+        if (planId == null) return;
+        dismissSheet();
+        const mapRef = getMapRef();
+        void cadastre
+          .applyCadastreFilter(planId, row.subSector.sector_id, mapRef, districtFallback, {
+            sectorHint: row.sector,
+          })
+          .then(() => {
+            cadastre.selectSubSector(row.subSector.id, mapRef);
+          });
         return;
       }
       void applyPlotResult(row.plot);
     },
-    [applySelection, applyPlotResult],
+    [
+      selectQuartierSector,
+      applyPlotResult,
+      cadastre,
+      getMapRef,
+      districtFallback,
+      dismissSheet,
+    ],
   );
 
   const zoneListData = useMemo(
@@ -374,17 +521,24 @@ export function useCadastreFilterSheet({
     [draftSectors, listSearch],
   );
 
+  const subSectorListData = useMemo(
+    () => draftSubSectors.filter((s) => matchesSubSector(s, listSearch)),
+    [draftSubSectors, listSearch],
+  );
+
   const sheetListData = useMemo((): Array<
-    HabitatPlan | HabitatSector | UnifiedRow
+    HabitatPlan | HabitatSector | HabitatSubSector | UnifiedRow
   > => {
     if (step === "zones") return zoneListData;
     if (step === "quartiers") return sectorsLoading ? [] : quartierListData;
+    if (step === "subsectors") return subSectorListData;
     if (step === "main" && isSearchMode) return searchRows;
     return [];
   }, [
     step,
     zoneListData,
     quartierListData,
+    subSectorListData,
     sectorsLoading,
     isSearchMode,
     searchRows,
@@ -405,6 +559,8 @@ export function useCadastreFilterSheet({
     setDraftPlanId,
     draftSectorId,
     setDraftSectorId,
+    draftSubSectorId,
+    draftSubSectors,
     listSearch,
     setListSearch,
     query,
@@ -425,6 +581,7 @@ export function useCadastreFilterSheet({
     sheetListData,
     zoneListData,
     quartierListData,
+    subSectorListData,
     canApply,
     cadastre,
     openFilter,
@@ -436,6 +593,9 @@ export function useCadastreFilterSheet({
     goBackToMain,
     pickZone,
     applySelection,
+    selectQuartierSector,
+    openSubSectorsForAppliedSector,
+    selectSubSectorRow,
     onSearchRowPress,
     setListSearchForStep: setListSearch,
   };

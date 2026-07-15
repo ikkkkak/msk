@@ -6,7 +6,10 @@ import {
   TouchableOpacity,
   Pressable,
 } from "react-native";
-import MapView, { Polygon, PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Polygon } from "react-native-maps";
+import { getMapProvider } from "../../utils/mapProvider";
+import { getPlatformMapViewConfig } from "../../utils/mapTilerAndroid";
+import { PlatformMapTileLayer } from "../map/PlatformMapTileLayer";
 import Animated, { FadeIn } from "react-native-reanimated";
 import { MapPin } from "phosphor-react-native";
 import { useTranslation } from "react-i18next";
@@ -74,8 +77,8 @@ export function AILandPlotMap({ rec, compact = false }: Props) {
       </View>
       <View style={[styles.mapShell, { height }]}>
         <MapView
-          provider={PROVIDER_GOOGLE}
-          mapType="satellite"
+          provider={getMapProvider()}
+          mapType={getPlatformMapViewConfig("satellite").mapType}
           style={StyleSheet.absoluteFill}
           initialRegion={region}
           scrollEnabled
@@ -87,6 +90,7 @@ export function AILandPlotMap({ rec, compact = false }: Props) {
           showsBuildings={false}
           toolbarEnabled={false}
         >
+          <PlatformMapTileLayer mapStyle="satellite" />
           <Polygon
             coordinates={ring}
             strokeColor="#DA8050"

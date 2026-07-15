@@ -143,6 +143,10 @@ import {
   ListingTrustBlock,
   ListingTrustSignal,
 } from "../components/trust/ListingTrustSignal";
+import {
+  PropertyDgdpeVerificationCard,
+  propertyHasTrucheck,
+} from "../components/property/PropertyDgdpeVerificationCard";
 import ShareWithAiAdvisorCard from "../components/ShareWithAiAdvisorCard";
 import { PropertySaleWhatsAppShareSheet } from "../components/share/PropertySaleWhatsAppShareSheet";
 import type { PropertySaleSharePayload } from "../utils/propertySaleShare";
@@ -224,6 +228,7 @@ type BadgeVariant =
   | "outline"
   | "fill"
   | "gold"
+  | "trucheck"
   | "success"
   | "error"
   | "premium";
@@ -240,6 +245,7 @@ const Badge = ({
     outline: { bg: "transparent", borderColor: BLACK, textColor: BLACK },
     fill: { bg: BLACK, borderColor: BLACK, textColor: "#FFF" },
     gold: { bg: "#FFF8E7", borderColor: GOLD, textColor: "#B8860B" },
+    trucheck: { bg: "#F0FDF4", borderColor: "#BBF7D0", textColor: "#166534" },
     success: { bg: "#E8F5E9", borderColor: "#4CAF50", textColor: "#2E7D32" },
     error: { bg: "#FEF2F2", borderColor: RED, textColor: "#B91C1C" },
     premium: {
@@ -258,7 +264,7 @@ const Badge = ({
         paddingHorizontal: 10,
         paddingVertical: 4,
         backgroundColor: s.bg,
-        borderWidth: variant === "outline" ? 1 : 0,
+        borderWidth: variant === "outline" || variant === "trucheck" ? 1 : 0,
         borderColor: s.borderColor,
         borderRadius: 4,
       }}
@@ -1072,8 +1078,7 @@ export const PropertySaleDetailsScreen = () => {
 
   const whatsAppShareProperty = useMemo((): PropertySaleSharePayload | null => {
     if (!id || !data) return null;
-    const imgs =
-      allGalleryImages.length > 0 ? allGalleryImages : displayImages;
+    const imgs = allGalleryImages.length > 0 ? allGalleryImages : displayImages;
     return {
       id,
       title: data.title,
@@ -1226,10 +1231,7 @@ export const PropertySaleDetailsScreen = () => {
               {data?.title || t("sale.detailsTitle")}
             </Text>
             <View style={{ flexDirection: "row", gap: 4 }}>
-              <Pressable
-                style={ss.navBtn}
-                onPress={openWhatsAppShareCard}
-              >
+              <Pressable style={ss.navBtn} onPress={openWhatsAppShareCard}>
                 <ShareNetwork size={20} color={BLACK} weight="bold" />
               </Pressable>
               <Pressable
@@ -1585,17 +1587,17 @@ export const PropertySaleDetailsScreen = () => {
                   {t("common.currencySymbol", "MRU")}
                 </Text>
               </Text>
-              <View style={ss.titleBadgesRow}>
-                {(data as any)?.truckeck && (
+              {/* <View style={ss.titleBadgesRow}>
+                {propertyHasTrucheck(data) ? (
                   <Badge
                     label={t(
                       "propertySaleDetails.badges.truckeck",
-                      "Truckeck verified",
+                      "TruCheck verified",
                     )}
-                    variant="gold"
-                    icon={<Seal size={11} color="#B8860B" weight="fill" />}
+                    variant="trucheck"
+                    icon={<Seal size={11} color="#166534" weight="fill" />}
                   />
-                )}
+                ) : null}
                 {isSoldListing ? (
                   <Badge
                     label={t("propertySaleDetails.badges.sold", "Sold")}
@@ -1611,13 +1613,15 @@ export const PropertySaleDetailsScreen = () => {
                   variant="premium"
                   icon={<Star size={11} color="#FFF" weight="fill" />}
                 />
-              </View>
+              </View> */}
             </View>
           </View>
 
           {hostIdentityReady ? (
             <HostIdentityBadge data={data as any} variant="banner" />
           ) : null}
+
+          {propertyHasTrucheck(data) ? <PropertyDgdpeVerificationCard /> : null}
 
           <Divider margin={8} />
 
@@ -1713,22 +1717,6 @@ export const PropertySaleDetailsScreen = () => {
                             "This host has not completed Meskeny identity verification yet.",
                           )
                 }
-                isLast={
-                  !(data as any)?.truckeck && !hostIsVerifiedBroker(data as any)
-                }
-              />
-            ) : null}
-            {(data as any)?.truckeck ? (
-              <ListingTrustSignal
-                icon={<Seal size={18} color="#B8860B" weight="fill" />}
-                title={t(
-                  "propertySaleDetails.trust.truckeckTitle",
-                  "Documents reviewed",
-                )}
-                subtitle={t(
-                  "propertySaleDetails.trust.truckeckDesc",
-                  "Listing paperwork was checked by our review team.",
-                )}
                 isLast={!hostIsVerifiedBroker(data as any)}
               />
             ) : null}
@@ -2365,10 +2353,7 @@ export const PropertySaleDetailsScreen = () => {
           />
           <ActionButton
             icon={<WhatsappLogoIcon size={17} color="#FFF" weight="fill" />}
-            label={t(
-              "propertySaleDetails.shareCard.shareShort",
-              "Share card",
-            )}
+            label={t("propertySaleDetails.shareCard.shareShort", "Share card")}
             onPress={openWhatsAppShareCard}
             variant="secondary"
           />
