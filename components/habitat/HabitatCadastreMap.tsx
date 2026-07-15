@@ -37,28 +37,13 @@ import type { MapLandmarkRecord } from "../../utils/landmarkMapMarkers";
 import { MapToolbar } from "../map/MapToolbar";
 import type { PlotShapeDescriptor } from "../../utils/habitatPlotGeometryCache";
 import {
-  USE_HABITAT_VECTOR_TILES,
-  canUseHabitatVectorTiles,
-} from "../../utils/habitatVectorTiles";
-import {
   USE_HABITAT_RASTER_OVERLAY,
   HABITAT_RASTER_TILE_SIZE,
   habitatSectorRasterTileUrl,
 } from "../../utils/habitatRasterOverlay";
 import { habitatApi } from "../../services/habitatApi";
-import { setCadastreGpuMapActive, isCadastreGpuMapActive } from "../../utils/habitatCadastreRenderer";
-import {
-  canAttemptMapLibreModuleLoad,
-  isMapLibreNativeAvailable,
-  resetMapLibreSessionGate,
-  warnIfMapLibreNativeMissing,
-} from "../../utils/habitatMapLibreNative";
 import type { CadastreMapHandle } from "../../utils/habitatCadastreMapRef";
-import type { ComponentType } from "react";
-import type { HabitatMapLibreCadastreProps } from "./HabitatMapLibreCadastre";
 import { theme } from "../../theme";
-import { USE_HABITAT_MAPLIBRE_GEOJSON } from "../../utils/habitatMapLibreGeoJSON";
-import { HabitatMapLibreGeoJSON } from "./HabitatMapLibreGeoJSON";
 
 const ACCENT = theme["color-temporary-primary"];
 
@@ -214,92 +199,8 @@ export function HabitatCadastreMap({
   const resolvedMapRegion = mapRegion ?? initialRegion;
 
   const cadastreMapRef = mapRef;
-  const [mapLibreFailed, setMapLibreFailed] = useState(false);
-  const [MapLibreCadastre, setMapLibreCadastre] = useState<
-    ComponentType<HabitatMapLibreCadastreProps> | null
-  >(null);
-  /** GPU path: vector tiles still downloading/rendering for the pinned quartier. */
-  const [gpuTilesLoading, setGpuTilesLoading] = useState(false);
-  /** True when plot polygons are drawn externally (GPU tiles or raster overlay) — this hook's own viewport-geometry pipeline is unused either way. */
-  const plotsRenderedExternally =
-    isCadastreGpuMapActive() || USE_HABITAT_RASTER_OVERLAY;
-
-  // Native map (Apple Maps/iOS, Google Maps/Android) with its own default
-  // imagery is the ONLY supported rendering path — USE_HABITAT_VECTOR_TILES
-  // is force-disabled (see habitatVectorTiles.ts), so useMapLibre is always
-  // false here and MapLibreCadastre never mounts. This is a deliberate,
-  // repeated product decision: do not re-enable without explicit direction.
-  // Known trade-off accepted by that decision: the server-rendered raster
-  // overlay supplying plot boundaries can briefly go blank mid-zoom while a
-  // new bitmap tile loads (no crossfade) — that's a raster-tile limitation,
-  // not a bug, and fixing it for real means MapLibre's GPU vector path,
-  // which was explicitly rejected in favor of native provider imagery.
-  const useMapLibre = USE_HABITAT_VECTOR_TILES && !mapLibreFailed;
-  const mapLibreNativeReady = useMapLibre && isMapLibreNativeAvailable();
-  const showMapLibre =
-    useMapLibre && MapLibreCadastre != null && !mapLibreFailed;
-  const mapLibreBooting =
-    mapLibreNativeReady && MapLibreCadastre == null && !mapLibreFailed;
-
-  useEffect(() => {
-    setCadastreGpuMapActive(showMapLibre);
-    if (!showMapLibre) setGpuTilesLoading(false);
-    return () => setCadastreGpuMapActive(false);
-  }, [showMapLibre]);
-
-  useEffect(() => {
-    if (__DEV__) {
-      warnIfMapLibreNativeMissing(USE_HABITAT_VECTOR_TILES);
-    }
-  }, []);
-
-  useEffect(() => {
-    // canAttemptMapLibreModuleLoad() must run BEFORE the dynamic import below,
-    // not just before mounting the component — in Expo Go, merely evaluating
-    // @maplibre/maplibre-react-native's JS module can hard-crash the app
-    // (native module lookups at import time), so this path must never
-    // attempt the import at all there. Moot while USE_HABITAT_VECTOR_TILES
-    // is force-disabled (useMapLibre is always false, so this bails out on
-    // the first condition below), but kept as defense in depth in case that
-    // ever changes.
-    if (
-      !useMapLibre ||
-      !USE_HABITAT_VECTOR_TILES ||
-      !canAttemptMapLibreModuleLoad()
-    ) {
-      setMapLibreCadastre(null);
-      return;
-    }
-    let cancelled = false;
-    void import("./HabitatMapLibreCadastre")
-      .then((mod) => {
-        if (!cancelled) {
-          resetMapLibreSessionGate();
-          setMapLibreCadastre(() => mod.HabitatMapLibreCadastre);
-        }
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) {
-          setMapLibreCadastre(null);
-          setMapLibreFailed(true);
-        }
-        console.warn(
-          "[HabitatCadastre] MapLibre module load failed — using react-native-maps",
-          err instanceof Error ? err.message : err,
-        );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleMapLibreError = useCallback((error: Error) => {
-    const { markMapLibreNativeUnavailable } =
-      require("../../utils/habitatMapLibreNative") as typeof import("../../utils/habitatMapLibreNative");
-    markMapLibreNativeUnavailable(error.message);
-    setMapLibreFailed(true);
-    setMapLibreCadastre(null);
-  }, []);
+  /** True when plot polygons are drawn externally (server raster overlay) — the hook's own geometry pipeline is unused then. */
+  const plotsRenderedExternally = USE_HABITAT_RASTER_OVERLAY;
 
   const handleRegionChange = useCallback(() => {
     plotCalloutSyncRef.current?.();
@@ -407,21 +308,7 @@ export function HabitatCadastreMap({
         { count: landsForSale.length },
       );
     }
-    if (selectedSectorId != null && isCadastreGpuMapActive()) {
-      const total = sectorPlotTotal || plotsLoadedCount;
-      if (total > 0) {
-        return t(
-          "habitatCadastre.levelPlotsVectorTiles",
-          "{{count}} plots — GPU vector tiles",
-          { count: total },
-        );
-      }
-    }
-    if (
-      selectedSectorId != null &&
-      USE_HABITAT_RASTER_OVERLAY &&
-      !isCadastreGpuMapActive()
-    ) {
+    if (selectedSectorId != null && USE_HABITAT_RASTER_OVERLAY) {
       const total = sectorPlotTotal || plotsLoadedCount;
       if (total > 0) {
         return t("habitatCadastre.levelPlotsCount", "{{count}} plots loaded", {
@@ -541,17 +428,12 @@ export function HabitatCadastreMap({
       (mapNavigating && selectedPlanId != null && selectedSectorId == null) ||
       (sectorsLoading && selectedPlanId != null && selectedSectorId == null));
 
-  /** GPU path: tiles for the pinned quartier are still downloading/rendering. */
-  const loadingQuartierGpu =
-    isCadastreGpuMapActive() && selectedSectorId != null && gpuTilesLoading;
-
   const loadingQuartier =
-    ((plansLoading || loadingPlots || geometryPreparing) &&
-      !plotsRenderedExternally &&
-      !plotOpen &&
-      !landOpen &&
-      !loadingPlan) ||
-    (loadingQuartierGpu && !plotOpen && !landOpen && !loadingPlan);
+    (plansLoading || loadingPlots || geometryPreparing) &&
+    !plotsRenderedExternally &&
+    !plotOpen &&
+    !landOpen &&
+    !loadingPlan;
 
   const loadingMessage = (() => {
     if (loadingPlan) {
@@ -564,9 +446,6 @@ export function HabitatCadastreMap({
           "Loading quartiers for this zone…",
         );
       }
-      return t("habitatCadastre.gettingPlan", "We're getting your plan…");
-    }
-    if (loadingQuartierGpu) {
       return t("habitatCadastre.gettingPlan", "We're getting your plan…");
     }
     if (geometryPreparing) {
@@ -633,58 +512,9 @@ export function HabitatCadastreMap({
     outputRange: [0.45, 1],
   });
 
-  // MapLibre GL + GeoJSON client-side rendering (no tile server)
-  if (USE_HABITAT_MAPLIBRE_GEOJSON) {
-    return (
-      <HabitatMapLibreGeoJSON
-        mapRef={mapRef}
-        initialRegion={initialRegion}
-        plots={plots}
-        selectedPlotId={selectedPlotId}
-        onPlotPress={onPlotPress}
-        loadingPlots={loadingPlots}
-      />
-    );
-  }
-
   return (
     <View style={styles.wrap}>
-      {showMapLibre ? (
-        <MapErrorBoundary onError={handleMapLibreError} fallback={null}>
-          <MapLibreCadastre
-            mapRef={cadastreMapRef}
-            initialRegion={initialRegion}
-            mapRegion={resolvedMapRegion}
-            viewLevel={viewLevel}
-            plans={plans}
-            sectors={sectors}
-            selectedPlanId={selectedPlanId}
-            selectedSectorId={selectedSectorId}
-            selectedPlotId={selectedPlotId}
-            selectedPlot={selectedPlot}
-            subSectors={subSectors}
-            selectedSubSectorId={selectedSubSectorId}
-            onSubSectorPress={onSubSectorPress}
-            districtFallback={districtFallback}
-            mapZoom={mapZoom}
-            onRegionChange={handleRegionChange}
-            onRegionChangeComplete={handleRegionChangeComplete}
-            onPlotPress={onPlotPress}
-            onMapBackgroundPress={handleMapPress}
-            landsForSale={landsForSale}
-            selectedLandId={selectedLand?.id ?? null}
-            showLandPanel={showLandPanel}
-            onLandPress={onLandPress}
-            onLandClusterPress={onLandClusterPress}
-            loadingPlots={loadingPlots}
-            onTilesLoadingChange={setGpuTilesLoading}
-          />
-        </MapErrorBoundary>
-      ) : mapLibreBooting ? (
-        <View style={styles.mapBoot}>
-          <ActivityIndicator size="large" color={ACCENT} />
-        </View>
-      ) : (
+      {(
         <MapView
           ref={mapRef as React.RefObject<MapView | null>}
           style={StyleSheet.absoluteFill}

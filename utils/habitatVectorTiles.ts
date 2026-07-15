@@ -1,37 +1,26 @@
 /**
- * Vector tile URLs for Habitat cadastre (MapLibre migration).
- * Phase 2+: MapLibre VectorSource points at these tiles instead of 7K React polygons.
+ * Server vector-tile endpoints for Habitat cadastre.
+ *
+ * The MapLibre GPU rendering path was removed — the cadastre map is the
+ * platform's native provider (Apple Maps on iOS, Google Maps on Android)
+ * with quartier-scoped, viewport-culled native polygons. These URL helpers
+ * and the TileJSON type remain because the backend still serves MVT tiles
+ * (used by web/admin tooling) and habitatApi types reference them.
  */
 import { serverUrl } from "../constants";
-import {
-  isMapLibreNativeAvailable,
-  markMapLibreNativeUnavailable,
-} from "./habitatMapLibreNative";
 import { isCadastreGpuMapActive } from "./habitatCadastreRenderer";
 
-/**
- * GPU vector tiles (MapLibre) — OFF. Final architecture decision: the
- * cadastre map uses ONLY the platform's default provider (Apple Maps on
- * iOS, Google Maps on Android) via react-native-maps. Plot scaling is
- * handled by quartier-scoped fetching + a spatial index + viewport-culled
- * native polygons (see utils/habitatSpatialIndex.ts and
- * utils/habitatViewportPlots.ts) — never by mounting a MapLibre canvas
- * with third-party imagery. MapLibre attempts external tile styles
- * (Esri/OSM/MapTiler), which is exactly what was removed.
- */
+/** GPU vector tiles are permanently disabled in the mobile app. */
 export const USE_HABITAT_VECTOR_TILES = false;
 
-/** Above this count, react-native-maps per-plot geometry prefetch is disabled (OOM). */
+/** Above this count, per-plot geometry prefetch used to be skipped for the GPU path. */
 export const LARGE_QUARTIER_PLOT_THRESHOLD = 150;
 
-/** Runtime gate: GPU MapLibre map mounted or native modules present. */
 export function canUseHabitatVectorTiles(): boolean {
-  if (!USE_HABITAT_VECTOR_TILES) return false;
-  if (isCadastreGpuMapActive()) return true;
-  return isMapLibreNativeAvailable();
+  return false;
 }
 
-/** Skip RN polygon geometry when GPU tiles handle drawing. */
+/** Skip RN polygon geometry when an external layer handles drawing. */
 export function shouldPrefetchPlotGeometry(_plotCount: number): boolean {
   return !isCadastreGpuMapActive();
 }
@@ -44,8 +33,7 @@ export function isLargeQuartier(plotCount: number): boolean {
  * No ".pbf" suffix on purpose — Iris (backend router) doesn't match a
  * literal suffix glued onto a typed path param in the same segment, so
  * `{y}.pbf` 404s on every request. Verified directly against the deployed
- * Iris version. MapLibre doesn't need the extension; it reads the
- * Content-Type response header instead.
+ * Iris version.
  */
 export function habitatSectorTileUrl(sectorId: number): string {
   return `${serverUrl}/habitat/sectors/${sectorId}/tiles/{z}/{x}/{y}`;
@@ -55,12 +43,6 @@ export function habitatSectorTileJsonUrl(sectorId: number): string {
   return `${serverUrl}/habitat/sectors/${sectorId}/tiles.json`;
 }
 
-/**
- * Nationwide tile URL (no sector scoping) — backend requires PostGIS to be
- * ready (returns 503 otherwise). Not wired into the map yet; the product
- * flow still picks a quartier first. Exists so nationwide cadastre browsing
- * doesn't need another migration later.
- */
 export function habitatNationwideTileUrl(): string {
   return `${serverUrl}/habitat/tiles/{z}/{x}/{y}`;
 }

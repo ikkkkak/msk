@@ -20,16 +20,7 @@ import Animated, {
   Easing,
 } from "react-native-reanimated";
 import { MaterialIcons } from "@expo/vector-icons";
-import {
-  CaretRight,
-  MapPin,
-  Buildings,
-  Hash,
-  Ruler,
-  Mountains,
-  ArrowsOutSimple,
-  type Icon,
-} from "phosphor-react-native";
+import { CaretRight } from "phosphor-react-native";
 import * as Haptics from "expo-haptics";
 import { useTranslation } from "react-i18next";
 import type { HabitatPlot, LatLng } from "../../types/habitat";
@@ -49,6 +40,8 @@ const ACCENT = theme["color-temporary-primary"];
 const INK = "#222222";
 const SUBTLE = "#717171";
 const HAIRLINE = "rgba(0,0,0,0.06)";
+/** Cadastre-sheet table border — visible hairline like the official document. */
+const TABLE_BORDER = "#D8DCE1";
 
 export const HABITAT_CALLOUT_POINTER_OFFSET = CALLOUT_LIFT_GAP + POINTER_HEIGHT;
 
@@ -56,7 +49,6 @@ type CalloutRow = {
   key: string;
   label: string;
   value: string;
-  icon: Icon;
 };
 
 function formatElevation(value: number | null | undefined): string {
@@ -65,6 +57,13 @@ function formatElevation(value: number | null | undefined): string {
   return `${sign}${value} m`;
 }
 
+/**
+ * Official cadastre sheet rows — matches the reference table exactly:
+ * المقاطعة (district/plan), المنطقة (zone/sector), القطعة (plot no.),
+ * المساحة (area), الإرتفاع (elevation), الأضلاع (side lengths).
+ * Labels are always Arabic on the right, values Latin on the left, like the
+ * paper cadastre document, regardless of app language.
+ */
 function buildCalloutRows(
   plot: HabitatPlot,
   isRtl: boolean,
@@ -84,43 +83,43 @@ function buildCalloutRows(
   const sectorCode = plot.sector?.code?.trim() || "";
   const area = plot.area_m2 ?? plot.area_rounded;
   const plotNo = displayPlotNumber(plot.plot_number);
+  const elevation =
+    plot.el_value != null
+      ? plot.el_value
+      : plot.il_value != null && Number.isFinite(Number(plot.il_value))
+        ? Number(plot.il_value)
+        : null;
 
   return [
     {
       key: "district",
-      label: arLabel("habitatCadastre.card.zone", "المنطقة"),
+      label: arLabel("habitatCadastre.card.district", "المقاطعة"),
       value: (planName || planCode || "—").toLowerCase(),
-      icon: MapPin,
     },
     {
-      key: "module",
-      label: arLabel("habitatCadastre.card.module", "الوحدة"),
-      value: sectorCode || sectorName || "—",
-      icon: Buildings,
+      key: "zone",
+      label: arLabel("habitatCadastre.card.zone", "المنطقة"),
+      value: sectorName || sectorCode || "—",
     },
     {
       key: "number",
-      label: arLabel("habitatCadastre.card.plotNumber", "رقم القطعة"),
+      label: arLabel("habitatCadastre.card.plotNumber", "القطعة"),
       value: plotNo || "—",
-      icon: Hash,
     },
     {
       key: "area",
       label: arLabel("habitatCadastre.card.areaSize", "المساحة"),
       value: area != null && Number(area) > 0 ? `${area} m²` : "—",
-      icon: Ruler,
     },
     {
       key: "elevation",
-      label: arLabel("habitatCadastre.card.elevation", "الارتفاع"),
-      value: formatElevation(plot.el_value),
-      icon: Mountains,
+      label: arLabel("habitatCadastre.card.elevation", "الإرتفاع"),
+      value: formatElevation(elevation),
     },
     {
       key: "dimensions",
       label: arLabel("habitatCadastre.card.sides", "الأضلاع"),
       value: formatPlotDimensions(plot),
-      icon: ArrowsOutSimple,
     },
   ];
 }
@@ -157,6 +156,12 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
     () => buildCalloutRows(plot, isRtl, arLabel),
     [plot, isRtl, arLabel],
   );
+
+  const subSectorName = useMemo(() => {
+    const s = plot.sub_sector;
+    const name = localizedHabitatName(isRtl, s?.name, s?.name_ar);
+    return (name || plot.sub_sector_code || "").trim();
+  }, [plot, isRtl]);
 
   const dismiss = () => {
     Haptics.selectionAsync().catch(() => {});
@@ -197,25 +202,33 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
           </Pressable>
         </View>
 
-        <View style={styles.grid}>
-          {rows.map((row) => {
-            const RowIcon = row.icon;
-            return (
-              <View key={row.key} style={styles.gridCell}>
-                <View style={styles.gridIconWrap}>
-                  <RowIcon size={15} color={ACCENT} weight="bold" />
-                </View>
-                <View style={styles.gridTextWrap}>
-                  <Text style={styles.gridValue} numberOfLines={1}>
-                    {row.value}
-                  </Text>
-                  <Text style={styles.gridLabel} numberOfLines={1}>
-                    {row.label}
-                  </Text>
-                </View>
+        <View style={styles.table}>
+          {rows.map((row, idx) => (
+            <View
+              key={row.key}
+              style={[styles.tableRow, idx === rows.length - 1 && !subSectorName && styles.tableRowLast]}
+            >
+              <View style={styles.valueCell}>
+                <Text style={styles.valueText} numberOfLines={2}>
+                  {row.value}
+                </Text>
               </View>
-            );
-          })}
+              <View style={styles.labelCell}>
+                <Text style={styles.labelText} numberOfLines={1}>
+                  {row.label}
+                </Text>
+              </View>
+            </View>
+          ))}
+          {subSectorName ? (
+            <View style={[styles.tableRow, styles.tableRowLast]}>
+              <View style={styles.footerCell}>
+                <Text style={styles.footerText} numberOfLines={1}>
+                  {subSectorName}
+                </Text>
+              </View>
+            </View>
+          ) : null}
         </View>
 
         {isForSale && onViewAllDetails ? (
@@ -585,42 +598,70 @@ const styles = StyleSheet.create({
     backgroundColor: "#F7F7F7",
     borderRadius: 14,
   },
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    paddingHorizontal: 10,
-    paddingBottom: 12,
-    borderTopWidth: 1,
-    borderTopColor: HAIRLINE,
-    paddingTop: 12,
+  /**
+   * Official cadastre sheet table — full-width bordered rows, value cell on
+   * the left (Latin), Arabic label cell on the right with a light header
+   * tint, exactly like the paper/web cadastre document. Direction is forced
+   * LTR so the layout matches the reference in RTL app language too.
+   */
+  table: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: TABLE_BORDER,
+    borderRadius: 8,
+    overflow: "hidden",
   },
-  gridCell: {
-    width: "50%",
+  tableRow: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 4,
-    paddingVertical: 7,
+    direction: "ltr",
+    borderBottomWidth: 1,
+    borderBottomColor: TABLE_BORDER,
+    minHeight: 34,
   },
-  gridIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    alignItems: "center",
+  tableRowLast: {
+    borderBottomWidth: 0,
+  },
+  valueCell: {
+    flex: 1,
     justifyContent: "center",
-    backgroundColor: "rgba(209, 96, 36, 0.1)",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "#FFFFFF",
   },
-  gridTextWrap: { flex: 1, minWidth: 0 },
-  gridValue: {
+  valueText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: INK,
+    textAlign: "left",
+  },
+  labelCell: {
+    width: 92,
+    justifyContent: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: "#F7F7F8",
+    borderLeftWidth: 1,
+    borderLeftColor: TABLE_BORDER,
+  },
+  labelText: {
     fontSize: 13,
     fontWeight: "700",
     color: INK,
+    textAlign: "right",
+    writingDirection: "rtl",
   },
-  gridLabel: {
-    fontSize: 11,
-    fontWeight: "500",
+  footerCell: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 7,
+    backgroundColor: "#FFFFFF",
+  },
+  footerText: {
+    fontSize: 12.5,
+    fontWeight: "600",
     color: SUBTLE,
-    marginTop: 1,
   },
   saleCta: {
     flexDirection: "row",

@@ -15,8 +15,7 @@
       "expo-web-browser",
       "expo-localization",
       "./plugins/withRemoveStoragePermissions.js",
-      "@bacons/apple-targets",
-      "@maplibre/maplibre-react-native"
+      "@bacons/apple-targets"
     ],
     "experiments": {
       "reactNativeNewArchitecture": true
