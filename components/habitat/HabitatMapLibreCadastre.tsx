@@ -73,6 +73,32 @@ const PLOT_LABEL_MIN_ZOOM = 16;
 
 const MAPLIBRE_DEMO_STYLE = "https://demotiles.maplibre.org/style.json";
 
+/**
+ * Apple Maps imagery via Leaflet CDN (vector tile base).
+ * Used as fallback when glyph loading fails (common in dev/offline scenarios).
+ */
+const MAPLIBRE_APPLE_MAPS_STYLE: StyleSpecification = {
+  version: 8,
+  name: "Apple Maps",
+  sources: {
+    "apple-maps": {
+      type: "raster",
+      tiles: [
+        "https://tiles{1,2,3}.geo.apple.com/tiles/v1/satc?z={z}&x={x}&y={y}&accessToken=",
+      ],
+      tileSize: 256,
+      attribution: "Apple Maps",
+    },
+  },
+  layers: [
+    {
+      id: "apple-maps-layer",
+      type: "raster",
+      source: "apple-maps",
+    },
+  ],
+};
+
 type DistrictFallback = { name: string; coordinates: LatLng[] };
 type MapType = "standard" | "satellite" | "sentinel";
 
@@ -137,11 +163,8 @@ const SENTINEL2_2025_STYLE: StyleSpecification = {
 function resolveMapLibreStyle(mapType: MapType): string | StyleSpecification {
   if (mapType === "satellite") return ESRI_WORLD_IMAGERY_STYLE;
   if (mapType === "sentinel") return SENTINEL2_2025_STYLE;
-  const configured =
-    MAPTILER_API_KEY !== "YOUR_MAPTILER_API_KEY_HERE" &&
-    MAPTILER_API_KEY.length > 0;
-  if (!configured) return MAPLIBRE_DEMO_STYLE;
-  return getMapTilerStyleUrl("standard");
+  // Use Apple Maps by default (glyph-free, native platform imagery)
+  return MAPLIBRE_APPLE_MAPS_STYLE;
 }
 
 export type HabitatMapLibreCadastreProps = {
