@@ -9,7 +9,7 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, Platform } from "react-native";
 import type { Region } from "react-native-maps";
 import {
   Camera,
@@ -182,20 +182,17 @@ const SENTINEL2_2025_STYLE: StyleSpecification = {
   ],
 };
 
-function resolveMapLibreStyle(mapType: MapType): string | StyleSpecification {
-  if (mapType === "satellite") return ESRI_WORLD_IMAGERY_STYLE;
-  if (mapType === "sentinel") return SENTINEL2_2025_STYLE;
-  if (mapType === "google") return MAPLIBRE_GOOGLE_MAPS_STYLE;
-  if (mapType === "apple") return MAPLIBRE_APPLE_MAPS_STYLE;
-  // Default to Apple Maps (glyph-free, native platform imagery)
-  return MAPLIBRE_APPLE_MAPS_STYLE;
+function resolveMapLibreStyle(_mapType: MapType): string | StyleSpecification {
+  // Platform-specific defaults: Apple Maps for iOS, Google Maps for Android
+  return Platform.OS === "ios"
+    ? MAPLIBRE_APPLE_MAPS_STYLE
+    : MAPLIBRE_GOOGLE_MAPS_STYLE;
 }
 
 export type HabitatMapLibreCadastreProps = {
   mapRef: React.RefObject<CadastreMapHandle | null>;
   initialRegion: Region;
   mapRegion?: Region;
-  mapType?: MapType;
   viewLevel: HabitatMapViewLevel;
   plans: HabitatPlan[];
   sectors: HabitatSector[];
@@ -258,7 +255,6 @@ function HabitatMapLibreCadastreInner({
   mapRef,
   initialRegion,
   mapRegion,
-  mapType = "satellite",
   viewLevel,
   plans,
   sectors,
@@ -288,7 +284,7 @@ function HabitatMapLibreCadastreInner({
   const lastRegionKey = useRef("");
   const lastSectorFitId = useRef<number | null>(null);
 
-  const mapStyle = useMemo(() => resolveMapLibreStyle(mapType), [mapType]);
+  const mapStyle = useMemo(() => resolveMapLibreStyle("standard"), []);
 
   const quartierPinned = selectedSectorId != null;
   const showPlanLayer =
