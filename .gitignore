@@ -75,3 +75,4 @@ dist/
 
 # @end expo-cli
 .aider*
+"client_secret_*.json" 
