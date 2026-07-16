@@ -61,8 +61,6 @@ import { CadastrePerfTrace } from "../utils/habitatCadastrePerf";
 import { isPlotRenderingHandledExternally } from "../utils/habitatCadastreRenderer";
 import {
   MAX_NATIVE_MAP_CHILDREN_SECTOR,
-  MID_ZOOM_PLOT_SAMPLE,
-  PLOT_FULL_DETAIL_ZOOM,
   MIN_ZOOM_SECTOR_PLOT_GEOM,
 } from "../utils/habitatMapLimits";
 import {
@@ -1439,20 +1437,20 @@ export function useHabitatCadastre() {
   }, [sectorDrawablePlots, sectorShapesStatic, selectedPlot, debouncedRegion]);
 
   /**
-   * LOD ordering — ONE stable array whose prefix is always a representative
-   * sample of the whole quartier: stride-sampled plots first, the remainder
-   * after. Every zoom tier is then just a slice length of this array, so
-   * tier transitions add/remove polygons incrementally with zero identity
-   * churn (the same descriptor objects stay mounted across tiers).
+   * Stable ordering with an evenly-strided spatial spread up front — during
+   * the chunked reveal the quartier fills in uniformly across its whole
+   * area instead of sweeping in database order. One array, never reordered
+   * after build, so mounted polygon identity is permanent while pinned.
    */
   const orderedPlotShapes = useMemo(() => {
     const shapes = plotShapesFull;
-    if (shapes.length <= MID_ZOOM_PLOT_SAMPLE) return shapes;
-    const stride = Math.ceil(shapes.length / MID_ZOOM_PLOT_SAMPLE);
+    const SPREAD = 900;
+    if (shapes.length <= SPREAD) return shapes;
+    const stride = Math.ceil(shapes.length / SPREAD);
     const sampled: typeof shapes = [];
     const rest: typeof shapes = [];
     for (let i = 0; i < shapes.length; i++) {
-      if (i % stride === 0 && sampled.length < MID_ZOOM_PLOT_SAMPLE) {
+      if (i % stride === 0 && sampled.length < SPREAD) {
         sampled.push(shapes[i]!);
       } else {
         rest.push(shapes[i]!);
@@ -1462,20 +1460,16 @@ export function useHabitatCadastre() {
   }, [plotShapesFull]);
 
   /**
-   * Zoom-gated mount budget. All 1,800+ mounted at once is only safe while
-   * zoomed in enough that the map rasterizes a small visible subset per
-   * frame; zoomed out, every polygon lands in every pan frame's redraw and
-   * the sustained tessellation spike kills the app (observed crash:
-   * zoom-out + pan with the full quartier mounted). Below full-detail zoom
-   * a sampled preview keeps the quartier visually dense; below plot zoom
-   * only the quartier boundary renders — plots are sub-pixel there anyway.
+   * Binary LOD: every plot the server returned is mounted whenever the
+   * camera is at plot-readable zoom — NO sampling, NO viewport culling
+   * (product requirement: the full official cadastre, like the paper
+   * sheet). Below MIN_ZOOM_SECTOR_PLOT_GEOM only the quartier boundary
+   * renders — plots are sub-pixel there. The transition is a prefix-slice
+   * of the stable ordered array, applied incrementally.
    */
   const plotLodCount = useMemo(() => {
     const z = zoomFromRegion(debouncedRegion.longitudeDelta);
     if (z < MIN_ZOOM_SECTOR_PLOT_GEOM) return 0;
-    if (z < PLOT_FULL_DETAIL_ZOOM) {
-      return Math.min(MID_ZOOM_PLOT_SAMPLE, orderedPlotShapes.length);
-    }
     return orderedPlotShapes.length;
   }, [debouncedRegion.longitudeDelta, orderedPlotShapes]);
 

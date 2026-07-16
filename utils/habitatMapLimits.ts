@@ -36,21 +36,13 @@ export const MAX_PLOTS_VIEWPORT_SECTOR = 80;
 export const MIN_ZOOM_SECTOR_PLOT_GEOM = 12;
 
 /**
- * Pinned-quartier level-of-detail. Every plot mounted at once is only safe
- * while the camera is close enough that MapKit/GMaps rasterize a small
- * subset per tile. Zoomed out, ALL polygons land in every visible tile and
- * each pan frame re-tessellates the entire quartier — that sustained spike
- * is what crashed the app on zoom-out + pan with 1,800 mounted.
- *
- *   zoom >= PLOT_FULL_DETAIL_ZOOM  → full static set (every plot)
- *   MIN_ZOOM_SECTOR_PLOT_GEOM..14  → evenly sampled preview (cap below)
- *   zoom < MIN_ZOOM_SECTOR_PLOT_GEOM → boundary only (plots are sub-pixel)
- *
- * Transitions are prefix-slices of ONE stable ordered array — polygons are
- * added/removed incrementally, never rebuilt.
+ * Pinned-quartier LOD is now binary: at or above MIN_ZOOM_SECTOR_PLOT_GEOM
+ * every plot in the quartier is mounted (complete data, matching the
+ * official cadastre); below it only the quartier boundary renders — plots
+ * are sub-pixel at city zoom. The transition is a prefix-slice of ONE
+ * stable ordered array, so crossing it adds/removes polygons incrementally
+ * without ever rebuilding the mounted set.
  */
-export const PLOT_FULL_DETAIL_ZOOM = 14;
-export const MID_ZOOM_PLOT_SAMPLE = 900;
 
 /** Plot number labels — only render when very few plots visible. */
 export const MAX_PLOT_NUMBER_LABELS = 8;
@@ -61,15 +53,14 @@ export const MAX_PLOT_NUMBER_LABELS = 8;
 export const MAX_NATIVE_MAP_CHILDREN = 250;
 
 /**
- * Max native polygons mounted when a quartier is pinned.
- *
- * Quartiers at or under this count mount ALL their plots as one STATIC set
- * (built once per quartier, never rebuilt on pan/zoom) — map polygons are
- * GPU overlays (MKPolygon / GMaps polygon), not views, and a static set of
- * ~2K is fine on both platforms. The earlier 1,754-plot crash came from the
- * set being re-created and re-diffed on every camera move (identity churn),
- * not from the steady-state overlay count — that churn is what the static
- * path eliminates. Quartiers above this (4K–8K) fall back to spatial-index
- * viewport culling with this same number as the mounted cap.
+ * Max native polygons mounted when a quartier is pinned — set ABOVE the
+ * largest quartier in the dataset (8K plots), so every quartier mounts its
+ * COMPLETE plot set as one static overlay collection. No sampling, no
+ * viewport culling: the product requirement is that every plot the server
+ * returns is drawn. Map polygons are GPU overlays (MKPolygon / GMaps
+ * polygon), not views; the historical crashes were identity churn (the set
+ * being rebuilt per camera move) and the geometry effect cycling
+ * mount/unmount storms across a zoom boundary — both eliminated. The static
+ * set is built once per quartier and never rebuilt while pinned.
  */
-export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 2000;
+export const MAX_NATIVE_MAP_CHILDREN_SECTOR = 9000;

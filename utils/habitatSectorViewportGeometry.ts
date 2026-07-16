@@ -68,9 +68,14 @@ export async function fetchSectorViewportGeometry(opts: {
   return { bboxPlots: 0, batchPlots: batchCount, drawableCount };
 }
 
-/** Progressive native polygon reveal — avoids 1754 polygons in one frame. */
-export const PLOT_SHAPE_CHUNK_SIZE = 80;
-export const PLOT_SHAPE_CHUNK_DELAY_MS = 45;
+/**
+ * Progressive native polygon reveal — never mounts the whole quartier in a
+ * single frame. 150/40ms fills an 1,800-plot quartier in ~0.5s and the
+ * largest (8K) in ~2.1s, with the evenly-spread ordering making the
+ * quartier look complete well before the last chunk lands.
+ */
+export const PLOT_SHAPE_CHUNK_SIZE = 150;
+export const PLOT_SHAPE_CHUNK_DELAY_MS = 40;
 
 export function scheduleProgressiveReveal(
   total: number,
