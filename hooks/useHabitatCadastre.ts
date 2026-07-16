@@ -365,6 +365,8 @@ export function useHabitatCadastre() {
   const revealedSectorRef = useRef<number | null>(null);
   /** Last count actually applied to the map — staged reveals resume from here. */
   const revealedCountRef = useRef(0);
+  /** Quartier whose geometry one-shot load already ran (reset on switch/clear). */
+  const sectorGeometryLoadedRef = useRef<number | null>(null);
   const lastPlotViewportHash = useRef("");
   const lastSectorViewportHash = useRef("");
 
@@ -549,34 +551,28 @@ export function useHabitatCadastre() {
   }, [debouncedRegion, selectedPlanId, selectedSectorId]);
 
   /**
-   * Pinned quartier — Layer 2: fetch geometry for visible bbox only (never entire quartier).
+   * Pinned quartier — Layer 2: load the quartier's geometry ONCE into the
+   * cache. Deliberately NOT keyed on the camera: the previous version
+   * re-ran on every viewport change and flipped plotsGeometryReady(false)
+   * whenever zoom dipped below MIN_SECTOR_VIEWPORT_ZOOM — each boundary
+   * crossing unmounted all ~1,800 native polygons and remounted them on
+   * the way back, and pinch-zooming across that line repeatedly was a
+   * reliable native crash. Zoom LOD is handled downstream by prefix-sliced
+   * tiers that never rebuild the descriptor set.
    */
   useEffect(() => {
     if (selectedSectorId == null || !sectorMetadataReady) return;
     if (isPlotRenderingHandledExternally()) return;
-
-    const z = zoomFromRegion(debouncedRegion.longitudeDelta);
-    if (z < MIN_SECTOR_VIEWPORT_ZOOM) {
-      setPlotsGeometryReady(false);
-      setRevealedPlotShapeCount(0);
-      return;
-    }
-
-    if (!regionMovedEnough(lastPlotFetchRegion.current, debouncedRegion)) {
-      return;
-    }
-
-    const plotHash = computeViewportHash(debouncedRegion);
-    if (plotHash === lastSectorViewportHash.current) {
-      return;
-    }
+    if (sectorPlots.length === 0) return;
+    if (sectorGeometryLoadedRef.current === selectedSectorId) return;
+    sectorGeometryLoadedRef.current = selectedSectorId;
 
     const gen = ++sectorViewportGen.current;
     setLoadingViewportGeometry(true);
 
-    devLog(CADASTRE_LOG, "[Sector viewport] bbox geometry fetch", {
+    devLog(CADASTRE_LOG, "[Sector geometry] one-shot quartier load", {
       sectorId: selectedSectorId,
-      zoom: z,
+      plots: sectorPlots.length,
     });
 
     void fetchSectorViewportGeometry({
@@ -588,21 +584,17 @@ export function useHabitatCadastre() {
     })
       .then((result) => {
         if (gen !== sectorViewportGen.current) return;
-
-        lastPlotFetchRegion.current = debouncedRegion;
-        lastSectorViewportHash.current = plotHash;
         setPlotGeometryRevision((n) => n + 1);
         setPlotsGeometryReady(true);
 
-        devLog(CADASTRE_LOG, "[Sector viewport] geometry ready", {
-          bboxPlots: result.bboxPlots,
+        devLog(CADASTRE_LOG, "[Sector geometry] ready", {
           batchPlots: result.batchPlots,
           drawable: result.drawableCount,
         });
       })
       .catch((err) => {
         if (gen !== sectorViewportGen.current) return;
-        console.warn(CADASTRE_LOG, "[Sector viewport] geometry fetch failed", err);
+        console.warn(CADASTRE_LOG, "[Sector geometry] fetch failed", err);
         setPlotsGeometryReady(true);
       })
       .finally(() => {
@@ -610,13 +602,8 @@ export function useHabitatCadastre() {
           setLoadingViewportGeometry(false);
         }
       });
-  }, [
-    debouncedRegion,
-    selectedSectorId,
-    selectedPlanId,
-    sectorMetadataReady,
-    sectorPlots,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot per quartier; camera changes must not re-trigger it
+  }, [selectedSectorId, selectedPlanId, sectorMetadataReady, sectorPlots]);
 
   const onRegionChange = useCallback(() => {
     /* Intentionally no setState — avoids re-rendering map layers every pan frame. */
@@ -649,6 +636,7 @@ export function useHabitatCadastre() {
       // 25K-entry FIFO cap bounds memory to roughly the last 3–5 quartiers,
       // so revisiting a recent quartier redraws instantly with no geometry
       // refetch (see fetchSectorViewportGeometry, which skips cached ids).
+      sectorGeometryLoadedRef.current = null;
       ++sectorViewportGen.current;
       lastSectorViewportHash.current = "";
       lastPlotFetchRegion.current = null;
@@ -943,6 +931,7 @@ export function useHabitatCadastre() {
       ++applyGen.current;
       ++viewportGen.current;
       ++plotViewportGen.current;
+      sectorGeometryLoadedRef.current = null;
       setSelectedPlanId(planId);
       setSelectedSectorId(null);
       setSelectedSubSectorId(null);
@@ -1173,6 +1162,7 @@ export function useHabitatCadastre() {
     ++viewportGen.current;
     ++plotViewportGen.current;
     ++sectorViewportGen.current;
+    sectorGeometryLoadedRef.current = null;
     setSelectedPlanId(null);
     setSelectedSectorId(null);
     setSelectedSubSectorId(null);
