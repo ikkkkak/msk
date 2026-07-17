@@ -70,36 +70,45 @@ export async function fetchSectorViewportGeometry(opts: {
 
 /**
  * Progressive native polygon reveal — never mounts the whole quartier in a
- * single frame. 150/40ms fills an 1,800-plot quartier in ~0.5s and the
- * largest (8K) in ~2.1s, with the evenly-spread ordering making the
- * quartier look complete well before the last chunk lands.
+ * single frame. 80/45ms is the configuration the 1,840-plot quartier was
+ * verified stable with on-device; the evenly-spread mount order makes the
+ * quartier look complete well before the last chunk lands (~1s for 1,840,
+ * ~4.5s worst case for the largest 8K quartier).
  */
-export const PLOT_SHAPE_CHUNK_SIZE = 150;
-export const PLOT_SHAPE_CHUNK_DELAY_MS = 40;
+export const PLOT_SHAPE_CHUNK_SIZE = 80;
+export const PLOT_SHAPE_CHUNK_DELAY_MS = 45;
 
+/**
+ * Step the mounted-polygon count from `startAt` toward `total` in chunks —
+ * in EITHER direction. Mounting hundreds of native polygons in one frame is
+ * the classic bridge-spike crash; removing ~2,000 in one commit is a
+ * main-thread stall of its own (watchdog risk mid-gesture), so LOD
+ * downgrades stage the same way upgrades do.
+ */
 export function scheduleProgressiveReveal(
   total: number,
   onReveal: (count: number) => void,
   chunkSize = PLOT_SHAPE_CHUNK_SIZE,
   delayMs = PLOT_SHAPE_CHUNK_DELAY_MS,
-  /** Resume point — LOD upgrades stage only the delta instead of restarting from zero. */
+  /** Resume point — transitions stage only the delta instead of restarting from zero. */
   startAt = 0,
 ): () => void {
-  if (total <= 0) {
-    onReveal(0);
-    return () => {};
-  }
+  const target = Math.max(0, total);
+  const from = Math.max(0, startAt);
+  const dir = target >= from ? 1 : -1;
 
-  let revealed = Math.min(Math.max(startAt, 0) + chunkSize, total);
+  const advance = (n: number) =>
+    dir > 0 ? Math.min(n + chunkSize, target) : Math.max(n - chunkSize, target);
+
+  let revealed = advance(from);
   onReveal(revealed);
-
-  if (revealed >= total) return () => {};
+  if (revealed === target) return () => {};
 
   const timers: ReturnType<typeof setTimeout>[] = [];
   const step = () => {
-    revealed = Math.min(revealed + chunkSize, total);
+    revealed = advance(revealed);
     onReveal(revealed);
-    if (revealed < total) {
+    if (revealed !== target) {
       timers.push(setTimeout(step, delayMs));
     }
   };

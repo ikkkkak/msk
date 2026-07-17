@@ -288,17 +288,23 @@ const PlotGroup = memo(
     rings,
     labelAt,
     showLabel,
-    selectedPlotId,
+    selected,
     onPlotPress,
   }: {
     plot: HabitatPlot;
     rings: LatLng[][];
     labelAt: LatLng | null;
     showLabel: boolean;
-    selectedPlotId?: number | null;
+    /**
+     * Boolean, NOT the global selectedPlotId: with the id, every selection
+     * change failed the memo for ALL mounted groups — tapping a plot (or
+     * closing its card) re-rendered ~1,800 PlotGroups and pushed a fresh
+     * onPress closure to every native polygon in one commit. As a boolean,
+     * only the plot being selected/deselected re-renders.
+     */
+    selected: boolean;
     onPlotPress?: (p: HabitatPlot) => void;
   }) {
-    const selected = selectedPlotId === plot.id;
     const isForSale = plot.is_for_sale === true;
     return (
       <>
@@ -347,7 +353,8 @@ const PlotGroup = memo(
     prev.rings === next.rings &&
     prev.labelAt === next.labelAt &&
     prev.showLabel === next.showLabel &&
-    prev.selectedPlotId === next.selectedPlotId,
+    prev.selected === next.selected &&
+    prev.onPlotPress === next.onPlotPress,
 );
 
 const SectorGroup = memo(function SectorGroup({
@@ -618,7 +625,7 @@ function HabitatMapLayersInner({
           plot.id !== selectedPlotId &&
           plot.id !== selectedPlot?.id
         }
-        selectedPlotId={selectedPlotId}
+        selected={plot.id === selectedPlotId}
         onPlotPress={onPlotPress}
       />
     ));

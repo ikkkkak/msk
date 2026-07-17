@@ -1460,17 +1460,22 @@ export function useHabitatCadastre() {
   }, [plotShapesFull]);
 
   /**
-   * Binary LOD: every plot the server returned is mounted whenever the
-   * camera is at plot-readable zoom — NO sampling, NO viewport culling
-   * (product requirement: the full official cadastre, like the paper
-   * sheet). Below MIN_ZOOM_SECTOR_PLOT_GEOM only the quartier boundary
-   * renders — plots are sub-pixel there. The transition is a prefix-slice
-   * of the stable ordered array, applied incrementally.
+   * Binary LOD with hysteresis: every plot the server returned is mounted
+   * whenever the camera is at plot-readable zoom — NO sampling, NO viewport
+   * culling (product requirement: the full official cadastre, like the
+   * paper sheet). Below plot zoom only the quartier boundary renders —
+   * plots are sub-pixel there. Hysteresis (±0.4 zoom around the threshold)
+   * means hovering or pinch-settling on the boundary can never flap the
+   * whole set on and off repeatedly — the exact storm that crashed the map.
    */
+  const plotsLodVisibleRef = useRef(false);
   const plotLodCount = useMemo(() => {
     const z = zoomFromRegion(debouncedRegion.longitudeDelta);
-    if (z < MIN_ZOOM_SECTOR_PLOT_GEOM) return 0;
-    return orderedPlotShapes.length;
+    const visible = plotsLodVisibleRef.current
+      ? z >= MIN_ZOOM_SECTOR_PLOT_GEOM - 0.4
+      : z >= MIN_ZOOM_SECTOR_PLOT_GEOM + 0.4;
+    plotsLodVisibleRef.current = visible;
+    return visible ? orderedPlotShapes.length : 0;
   }, [debouncedRegion.longitudeDelta, orderedPlotShapes]);
 
   useEffect(() => {
@@ -1485,48 +1490,42 @@ export function useHabitatCadastre() {
       return;
     }
 
-    // Shrinking (zoom-out tier drop) applies immediately — removals are
-    // cheap. Growing by more than a couple of chunks (initial pin, or a
-    // zoom-in tier upgrade) is staged so hundreds of native polygons never
-    // mount in a single frame — the one-frame bridge spike is a known iOS
-    // react-native-maps crash pattern.
-    setRevealedPlotShapeCount((prev) => {
-      const target = plotLodCount;
-      if (target <= prev) return target;
-      if (target - prev <= PLOT_SHAPE_CHUNK_SIZE * 2) return target;
-      return prev;
-    });
-
+    // Single source of truth for the mounted count: small deltas apply in
+    // one commit; large deltas — initial pin, LOD show/hide — stage in
+    // chunks IN BOTH DIRECTIONS, so neither a mount storm nor a one-commit
+    // mass removal ever hits the native map mid-gesture.
+    const target = plotLodCount;
     const prev = revealedCountRef.current;
-    if (plotLodCount > prev + PLOT_SHAPE_CHUNK_SIZE * 2) {
-      return scheduleProgressiveReveal(
-        plotLodCount,
-        (n) => {
-          revealedCountRef.current = n;
-          setRevealedPlotShapeCount(n);
-        },
-        undefined,
-        undefined,
-        prev,
-      );
+    if (Math.abs(target - prev) <= PLOT_SHAPE_CHUNK_SIZE * 2) {
+      revealedCountRef.current = target;
+      setRevealedPlotShapeCount(target);
+      return;
     }
-    revealedCountRef.current = plotLodCount;
+    return scheduleProgressiveReveal(
+      target,
+      (n) => {
+        revealedCountRef.current = n;
+        setRevealedPlotShapeCount(n);
+      },
+      undefined,
+      undefined,
+      prev,
+    );
   }, [plotLodCount, plotsGeometryReady, selectedSectorId]);
 
   const plotShapesToRender = useMemo(() => {
     if (selectedSectorId == null) return undefined;
     if (isPlotRenderingHandledExternally()) return [];
     if (!plotsGeometryReady || orderedPlotShapes.length === 0) return [];
-    return orderedPlotShapes.slice(
-      0,
-      Math.min(revealedPlotShapeCount, plotLodCount),
-    );
+    // Sliced by the STAGED counter only — clamping by plotLodCount here
+    // would unmount the whole set in one commit the instant LOD flips to 0,
+    // bypassing the chunked removal the reveal effect schedules.
+    return orderedPlotShapes.slice(0, revealedPlotShapeCount);
   }, [
     selectedSectorId,
     orderedPlotShapes,
     plotsGeometryReady,
     revealedPlotShapeCount,
-    plotLodCount,
   ]);
 
   const plotsRevealReady =
