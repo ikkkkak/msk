@@ -9,8 +9,25 @@
  */
 import { serverUrl } from "../constants";
 
-/** Primary rendering path — native map (Apple/Google) + native polygon overlays. */
-export const USE_HABITAT_RASTER_OVERLAY = false;
+/**
+ * PRIMARY rendering path — "raster carpet, vector spotlight".
+ *
+ * The pinned quartier's plots render as server-baked image tiles over the
+ * native map (this flag), and ONLY the user's focus becomes a native
+ * object: one highlight polygon for the selected plot, one pin, one card.
+ * Device cost is O(visible tiles), not O(plots) — an 8,000-plot quartier
+ * costs the phone exactly what a 100-plot one does, plots appear as fast
+ * as the basemap itself, and the entire native-overlay crash class
+ * (mount storms, selection churn, zoom flapping) is architecturally
+ * impossible because nothing per-plot is ever mounted.
+ *
+ * The old "plots deform/vanish mid-zoom" complaints about this path had
+ * three specific causes, all closed: overzoom stretch (maxZoomLevel now
+ * capped at the tile pyramid's top), 1x bitmaps on retina screens (@2x
+ * tiles), and cold tiles rendering blank under pinch pressure (server
+ * prewarm sweep + client pyramid prefetch on quartier pin).
+ */
+export const USE_HABITAT_RASTER_OVERLAY = true;
 
 /**
  * Must match habitatRasterRenderVersion in routes/habitat_raster_tiles.go —

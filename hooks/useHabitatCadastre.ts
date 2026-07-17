@@ -59,6 +59,8 @@ import {
 } from "../utils/habitatViewportPlots";
 import { CadastrePerfTrace } from "../utils/habitatCadastrePerf";
 import { isPlotRenderingHandledExternally } from "../utils/habitatCadastreRenderer";
+import { USE_HABITAT_RASTER_OVERLAY } from "../utils/habitatRasterOverlay";
+import { prefetchSectorRasterTiles } from "../utils/habitatRasterPrefetch";
 import {
   MAX_NATIVE_MAP_CHILDREN_SECTOR,
   MIN_ZOOM_SECTOR_PLOT_GEOM,
@@ -666,6 +668,11 @@ export function useHabitatCadastre() {
 
       if (sectorHint) {
         setPinnedSector(sectorHint);
+        // Warm the raster tile pyramid immediately — plots appear as fast
+        // as the basemap and pinch-zoom never hits a cold tile.
+        if (USE_HABITAT_RASTER_OVERLAY) {
+          prefetchSectorRasterTiles(sectorHint);
+        }
       }
 
       const skipCamera = opts?.skipCameraFit === true;
@@ -720,6 +727,11 @@ export function useHabitatCadastre() {
 
         const { sector, planId: pid } = resolved;
         setPinnedSector(sector);
+        // Re-run with the resolved sector's authoritative bounds (the hint
+        // may have had none) — the previous sweep is aborted internally.
+        if (USE_HABITAT_RASTER_OVERLAY && !sectorHint) {
+          prefetchSectorRasterTiles(sector);
+        }
         const plan = plans.find((p) => p.id === pid) ?? planHint;
 
         if (!sectorHint && !skipCamera) {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   Easing,
   TouchableOpacity,
 } from "react-native";
-import MapView, { Region, UrlTile, type MapPressEvent } from "react-native-maps";
+import MapView, { Polygon, Region, UrlTile, type MapPressEvent } from "react-native-maps";
 import { useTranslation } from "react-i18next";
 import type {
   HabitatPlan,
@@ -35,7 +35,10 @@ import {
 import { HabitatLandForSaleLayer } from "./HabitatLandForSaleLayer";
 import type { MapLandmarkRecord } from "../../utils/landmarkMapMarkers";
 import { MapToolbar } from "../map/MapToolbar";
-import type { PlotShapeDescriptor } from "../../utils/habitatPlotGeometryCache";
+import {
+  getPlotRings,
+  type PlotShapeDescriptor,
+} from "../../utils/habitatPlotGeometryCache";
 import {
   USE_HABITAT_RASTER_OVERLAY,
   HABITAT_RASTER_TILE_SIZE,
@@ -48,6 +51,35 @@ import { theme } from "../../theme";
 const ACCENT = theme["color-temporary-primary"];
 
 const PLOT_LOADING_DELAY_MS = 160;
+
+/**
+ * Raster mode's ONLY per-plot native object — the selected plot's highlight
+ * polygon ("vector spotlight" over the raster carpet). Everything else on
+ * the quartier is baked into server tiles; this single polygon carries the
+ * selection affordance at native fidelity.
+ */
+const SelectedPlotSpotlight = memo(function SelectedPlotSpotlight({
+  plot,
+}: {
+  plot?: HabitatPlot | null;
+}) {
+  const rings = useMemo(() => (plot ? getPlotRings(plot) : []), [plot]);
+  if (!plot || rings.length === 0) return null;
+  return (
+    <>
+      {rings.map((ring, idx) => (
+        <Polygon
+          key={`plot-spotlight-${plot.id}-${idx}`}
+          coordinates={ring}
+          strokeColor="#FF2D8B"
+          strokeWidth={2.5}
+          fillColor="rgba(255, 45, 139, 0.30)"
+          zIndex={10}
+        />
+      ))}
+    </>
+  );
+});
 
 type DistrictFallback = {
   name: string;
@@ -557,6 +589,9 @@ export function HabitatCadastreMap({
               // through the live pinch-zoom scale, instead of upscaling 256px.
               tileSize={HABITAT_RASTER_TILE_SIZE}
             />
+          ) : null}
+          {USE_HABITAT_RASTER_OVERLAY ? (
+            <SelectedPlotSpotlight plot={selectedPlot} />
           ) : null}
           <MapErrorBoundary>
             <HabitatMapLayers
