@@ -1,0 +1,50 @@
+name: iOS Build (GitHub runner, no EAS quota)
+
+# Compiles the iOS dev build ON the GitHub macOS runner via `eas build
+# --local` — EAS only supplies signing credentials, so this consumes zero
+# EAS build-plan quota. Produces an ad-hoc .ipa artifact to download and
+# install on the registered iPhone.
+#
+# Required repo secrets:
+#   EXPO_TOKEN            — already configured (same as the EAS workflow)
+#   MAPBOX_DOWNLOAD_TOKEN — Mapbox sk. token with Downloads:Read scope
+#   MAPBOX_PUBLIC_TOKEN   — Mapbox pk. runtime token
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build iOS locally on runner
+        env:
+          MAPBOX_DOWNLOAD_TOKEN: ${{ secrets.MAPBOX_DOWNLOAD_TOKEN }}
+          EXPO_PUBLIC_MAPBOX_TOKEN: ${{ secrets.MAPBOX_PUBLIC_TOKEN }}
+        run: |
+          eas build --platform ios --profile development --local --non-interactive --output ./meskeny-dev.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: meskeny-dev-ipa
+          path: ./meskeny-dev.ipa
+          retention-days: 7
