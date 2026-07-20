@@ -370,8 +370,13 @@ function MapboxCadastreMapInner({
       ref={mbMapRef}
       style={StyleSheet.absoluteFill}
       styleURL={styleURL}
-      logoEnabled={false}
-      attributionEnabled={false}
+      // Mapbox wordmark + attribution (bottom-left) — required by Mapbox's
+      // terms of service, and the professional signal that this is the real
+      // Mapbox engine.
+      logoEnabled
+      attributionEnabled
+      attributionPosition={{ bottom: 8, left: 96 }}
+      logoPosition={{ bottom: 8, left: 8 }}
       compassEnabled={false}
       scaleBarEnabled={false}
       rotateEnabled={false}

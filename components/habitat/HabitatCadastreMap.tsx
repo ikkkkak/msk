@@ -57,6 +57,15 @@ const ACCENT = theme["color-temporary-primary"];
 
 const PLOT_LOADING_DELAY_MS = 160;
 
+// Preload the Mapbox engine module at file-evaluation time (guarded — never
+// in Expo Go). By the time this screen mounts, the import has resolved and
+// the map appears in one shot: no Apple-Maps flash, no visible engine swap.
+if (resolveCadastreEngine() === "mapbox") {
+  void import("./MapboxCadastreMap").catch(() => {
+    /* the mount-time effect handles failures with a proper fallback */
+  });
+}
+
 /**
  * Raster mode's ONLY per-plot native object — the selected plot's highlight
  * polygon ("vector spotlight" over the raster carpet). Everything else on
@@ -633,6 +642,13 @@ export function HabitatCadastreMap({
             onTilesLoadingChange={setGpuTilesLoading}
           />
         </MapErrorBoundary>
+      ) : engine === "mapbox" ? (
+        /* Engine module still resolving — neutral boot surface. NEVER mount
+           the Apple/Google fallback here: users saw the native map appear
+           and get replaced by Mapbox seconds later (double-map flash). */
+        <View style={styles.mapBoot}>
+          <ActivityIndicator size="large" color={ACCENT} />
+        </View>
       ) : (
         <MapView
           ref={mapRef as React.RefObject<MapView | null>}
@@ -844,7 +860,9 @@ const styles = StyleSheet.create({
   wrap: { flex: 1, backgroundColor: "#EBEEF1" },
   mapBoot: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "#EBEEF1",
+    // Dark surface — the default basemap is satellite imagery, so booting
+    // dark→dark reads as one continuous load instead of a white flash.
+    backgroundColor: "#151A21",
     alignItems: "center",
     justifyContent: "center",
   },
