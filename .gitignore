@@ -75,4 +75,9 @@ dist/
 
 # @end expo-cli
 .aider*
-"client_secret_*.json" 
+"client_secret_*.json"
+
+# Secrets — never commit tokens/keys. .env holds the Mapbox access token.
+.env
+.env.*
+!.env.example

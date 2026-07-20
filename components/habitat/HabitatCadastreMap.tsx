@@ -39,6 +39,11 @@ import {
   getPlotRings,
   type PlotShapeDescriptor,
 } from "../../utils/habitatPlotGeometryCache";
+import type { ComponentType } from "react";
+import { resolveCadastreEngine } from "../../mapengine/MapProvider";
+import { markMapboxRuntimeFailed } from "../../mapengine/MapEngine";
+import { setCadastreGpuMapActive } from "../../utils/habitatCadastreRenderer";
+import type { MapboxCadastreMapProps } from "./MapboxCadastreMap";
 import {
   USE_HABITAT_RASTER_OVERLAY,
   HABITAT_RASTER_TILE_SIZE,
@@ -233,8 +238,57 @@ export function HabitatCadastreMap({
   const resolvedMapRegion = mapRegion ?? initialRegion;
 
   const cadastreMapRef = mapRef;
-  /** True when plot polygons are drawn externally (server raster overlay) — the hook's own geometry pipeline is unused then. */
+  /** True when plot polygons are drawn externally (Mapbox GPU tiles or the server raster overlay) — the hook's own geometry pipeline is unused then. */
   const plotsRenderedExternally = USE_HABITAT_RASTER_OVERLAY;
+
+  /* -------- Mapbox GPU engine (primary) with automatic fallback -------- */
+  const [mapboxFailed, setMapboxFailed] = useState(false);
+  const [MapboxCadastre, setMapboxCadastre] = useState<
+    ComponentType<MapboxCadastreMapProps> | null
+  >(null);
+  const engine = !mapboxFailed ? resolveCadastreEngine() : "fallback";
+
+  useEffect(() => {
+    // Dynamic import ONLY after the gate approves — evaluating the Mapbox
+    // SDK module in a runtime without the native binary (Expo Go) crashes
+    // at import time, so this path must never attempt it there.
+    if (engine !== "mapbox") {
+      setMapboxCadastre(null);
+      return;
+    }
+    let cancelled = false;
+    void import("./MapboxCadastreMap")
+      .then((mod) => {
+        if (!cancelled) setMapboxCadastre(() => mod.MapboxCadastreMap);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          markMapboxRuntimeFailed(err instanceof Error ? err.message : String(err));
+          setMapboxCadastre(null);
+          setMapboxFailed(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [engine]);
+
+  const showMapbox = engine === "mapbox" && MapboxCadastre != null;
+
+  useEffect(() => {
+    // GPU engine active → the hook's logging/level-hint paths treat plots
+    // as externally rendered (same plumbing the MVT path always used).
+    setCadastreGpuMapActive(showMapbox);
+    return () => setCadastreGpuMapActive(false);
+  }, [showMapbox]);
+
+  const handleMapboxError = useCallback((error: Error) => {
+    markMapboxRuntimeFailed(error.message);
+    setMapboxFailed(true);
+    setMapboxCadastre(null);
+  }, []);
+
+  const [gpuTilesLoading, setGpuTilesLoading] = useState(false);
 
   const handleRegionChange = useCallback(() => {
     plotCalloutSyncRef.current?.();
@@ -488,15 +542,19 @@ export function HabitatCadastreMap({
       return t("habitatCadastre.gettingPlan", "We're getting your plan…");
     }
     // One warm, consistent expression for the whole quartier fetch→draw
-    // window (metadata fetch, geometry batches, first paint prep) instead
-    // of cycling through technical phase messages.
+    // window (metadata fetch, GPU tile streaming, first paint) instead of
+    // cycling through technical phase messages.
+    if (gpuTilesLoading && selectedSectorId != null) {
+      return t("habitatCadastre.gettingPlan", "We're getting your plan…");
+    }
     if ((geometryPreparing || loadingPlots) && selectedSectorId != null) {
       return t("habitatCadastre.gettingPlan", "We're getting your plan…");
     }
     return null;
   })();
 
-  const loadingRequested = loadingPlan || loadingQuartier;
+  const loadingRequested =
+    loadingPlan || loadingQuartier || (gpuTilesLoading && !plotOpen && !landOpen);
   const loadingDelayMs = loadingPlan ? 0 : PLOT_LOADING_DELAY_MS;
 
   useEffect(() => {
@@ -543,7 +601,39 @@ export function HabitatCadastreMap({
 
   return (
     <View style={styles.wrap}>
-      {(
+      {showMapbox ? (
+        <MapErrorBoundary onError={handleMapboxError} fallback={null}>
+          <MapboxCadastre
+            mapRef={cadastreMapRef}
+            initialRegion={initialRegion}
+            mapRegion={resolvedMapRegion}
+            mapType={mapType}
+            viewLevel={viewLevel}
+            plans={plans}
+            sectors={sectors}
+            selectedPlanId={selectedPlanId}
+            selectedSectorId={selectedSectorId}
+            selectedPlotId={selectedPlotId}
+            selectedPlot={selectedPlot}
+            subSectors={subSectors}
+            selectedSubSectorId={selectedSubSectorId}
+            onSubSectorPress={onSubSectorPress}
+            districtFallback={districtFallback}
+            mapZoom={mapZoom}
+            onRegionChange={handleRegionChange}
+            onRegionChangeComplete={handleRegionChangeComplete}
+            onPlotPress={onPlotPress}
+            onMapBackgroundPress={handleMapPress}
+            landsForSale={landsForSale}
+            selectedLandId={selectedLand?.id ?? null}
+            showLandPanel={showLandPanel}
+            onLandPress={onLandPress}
+            onLandClusterPress={onLandClusterPress}
+            loadingPlots={loadingPlots}
+            onTilesLoadingChange={setGpuTilesLoading}
+          />
+        </MapErrorBoundary>
+      ) : (
         <MapView
           ref={mapRef as React.RefObject<MapView | null>}
           style={StyleSheet.absoluteFill}
