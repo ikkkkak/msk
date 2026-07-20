@@ -5255,7 +5255,9 @@
       "viewAllDetails": "View all details",
       "viewListing": "View listing",
       "forSaleDetailsNotFound": "For-sale details are not available for this plot yet."
-    }
+    },
+    "subSectorLabel": "Sub-area (optional)",
+    "allSubSectorsShort": "All"
   },
   "apiErrors": {
     "serverUnreachableTitle": "Connection problem",

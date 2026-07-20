@@ -5441,7 +5441,9 @@
       "viewAllDetails": "Voir tous les détails",
       "viewListing": "Voir l'annonce",
       "forSaleDetailsNotFound": "Les détails de vente ne sont pas encore disponibles pour cette parcelle."
-    }
+    },
+    "subSectorLabel": "Sous-zone (optionnel)",
+    "allSubSectorsShort": "Tout"
   },
   "broker": {
     "dashboard": {
