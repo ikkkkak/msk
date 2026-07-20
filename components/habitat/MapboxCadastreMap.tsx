@@ -73,7 +73,7 @@ const PLOT_SOURCE_ID = "habitat-plots-mvt";
 /** Matches PLOT_LABEL_MIN_ZOOM in utils/habitatGeo.ts — cadastre-sheet-scale only. */
 const PLOT_LABEL_MIN_ZOOM = 16;
 /** Safety net — clear the loading chip even if render events never fire. */
-const TILES_LOADING_TIMEOUT_MS = 12000;
+const TILES_LOADING_TIMEOUT_MS = 5000;
 
 type DistrictFallback = { name: string; coordinates: LatLng[] };
 
@@ -186,21 +186,31 @@ function MapboxCadastreMapInner({
     [selectedSectorId],
   );
 
-  // "Getting your plan" chip while quartier tiles stream in.
+  // "Getting your plan" chip while quartier tiles stream in. Cleared by the
+  // FIRST map-idle after the tile source mounts — onMapIdle is the modern
+  // v10 signal and fires reliably; the legacy onDidFinishRenderingMapFully
+  // often never fires under the new architecture, which left this chip
+  // stuck until its (previously 12s) timeout on every quartier pin.
+  const tilesPendingRef = useRef(false);
   useEffect(() => {
     if (!plotTileUrl) {
+      tilesPendingRef.current = false;
       onTilesLoadingChange?.(false);
       return;
     }
     if (selectedSectorId != null) markQuartierLoadStart(selectedSectorId);
+    tilesPendingRef.current = true;
     onTilesLoadingChange?.(true);
     const timeout = setTimeout(() => {
+      tilesPendingRef.current = false;
       onTilesLoadingChange?.(false);
     }, TILES_LOADING_TIMEOUT_MS);
     return () => clearTimeout(timeout);
   }, [plotTileUrl, selectedSectorId, onTilesLoadingChange]);
 
   const handleMapFullyRendered = useCallback(() => {
+    if (!tilesPendingRef.current) return;
+    tilesPendingRef.current = false;
     onTilesLoadingChange?.(false);
     if (selectedSectorId != null) markQuartierRendered(selectedSectorId);
   }, [onTilesLoadingChange, selectedSectorId]);
@@ -339,6 +349,13 @@ function MapboxCadastreMapInner({
 
   const handleMapIdle = useCallback(
     (state: { properties?: { center?: number[]; zoom?: number } }) => {
+      // Idle = camera settled AND rendering caught up: the reliable "tiles
+      // are on screen" signal in v10 — dismiss the loading chip here, and
+      // treat the first idle as map-ready (legacy load callbacks may never
+      // fire under the new architecture).
+      handleMapReady();
+      handleMapFullyRendered();
+
       const center = state?.properties?.center;
       const zoom = state?.properties?.zoom;
       if (!center || center.length < 2 || zoom == null) return;
@@ -348,7 +365,7 @@ function MapboxCadastreMapInner({
       lastRegionKey.current = `${region.latitude.toFixed(5)}:${region.longitude.toFixed(5)}:${region.latitudeDelta.toFixed(5)}`;
       onRegionChangeComplete(region);
     },
-    [onRegionChangeComplete],
+    [onRegionChangeComplete, handleMapReady, handleMapFullyRendered],
   );
 
   const handlePlotPress = useCallback(
