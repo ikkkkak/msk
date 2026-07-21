@@ -2396,7 +2396,8 @@ import {
   Platform,
   Image,
   Share,
-  Pressable
+  Pressable,
+  Linking
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNavigation, useRoute } from "@react-navigation/native";
@@ -3186,29 +3187,54 @@ const MessageBubble: React.FC<{
         </Animated.View>
       )}
 
-      {/* Sources indicator */}
-      {assistantRevealDone && (message as any).sources > 0 && (
-        <View style={styles.sourcesRow}>
-          <View style={styles.sourceDots}>
-            {["#ACACBE", "#6E6E80", "#353740"].map((clr, i) => (
-              <View
-                key={i}
-                style={[
-                  styles.sourceDot,
-                  {
-                    backgroundColor: clr,
-                    marginLeft: i > 0 ? -6 : 0,
-                    zIndex: 3 - i
-                  }
-                ]}
-              />
-            ))}
+      {/* Sources — real, cited market listings behind the answer. Grounds
+          the response with references (title · price · location) that open
+          the original page, so MeskenyGPT reads as researched, not invented. */}
+      {assistantRevealDone &&
+        Array.isArray((message as any).sources) &&
+        (message as any).sources.length > 0 && (
+          <View style={styles.sourcesBlock}>
+            <Text style={styles.sourcesTitle}>
+              {t("aiChat.sourcesTitle", "Sources")}
+            </Text>
+            {((message as any).sources as Array<{
+              title?: string;
+              price_text?: string;
+              location?: string;
+              url?: string;
+            }>)
+              .slice(0, 4)
+              .map((src, i) => (
+                <Pressable
+                  key={i}
+                  style={({ pressed }) => [
+                    styles.sourceCard,
+                    pressed && { opacity: 0.7 }
+                  ]}
+                  onPress={() => {
+                    if (src.url) Linking.openURL(src.url).catch(() => {});
+                  }}
+                >
+                  <View style={styles.sourceIndex}>
+                    <Text style={styles.sourceIndexText}>{i + 1}</Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.sourceCardTitle} numberOfLines={1}>
+                      {src.title || src.url || "—"}
+                    </Text>
+                    {(src.price_text || src.location) && (
+                      <Text style={styles.sourceCardMeta} numberOfLines={1}>
+                        {[src.price_text, src.location]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </Text>
+                    )}
+                  </View>
+                  <Text style={styles.sourceCardArrow}>↗</Text>
+                </Pressable>
+              ))}
           </View>
-          <Text style={styles.sourcesText}>
-            {(message as any).sources} {t("aiChat.sources", "sources")}
-          </Text>
-        </View>
-      )}
+        )}
 
       {/* Action row + follow-up chips */}
       {assistantRevealDone && (
@@ -4811,7 +4837,42 @@ const styles = StyleSheet.create({
     flexShrink: 1
   },
 
-  // ── Sources ──
+  // ── Sources (cited market listings) ──
+  sourcesBlock: {
+    marginBottom: 10,
+    gap: 6
+  },
+  sourcesTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    textTransform: "uppercase",
+    color: C.textSub,
+    marginBottom: 2
+  },
+  sourceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: C.bgMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.border
+  },
+  sourceIndex: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.06)"
+  },
+  sourceIndexText: { fontSize: 11, fontWeight: "700", color: C.textSub },
+  sourceCardTitle: { fontSize: 13.5, fontWeight: "600", color: C.text },
+  sourceCardMeta: { fontSize: 11.5, color: C.textSub, marginTop: 1 },
+  sourceCardArrow: { fontSize: 14, color: C.textSub, fontWeight: "700" },
   sourcesRow: {
     flexDirection: "row",
     alignItems: "center",
