@@ -411,16 +411,10 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
   const { t } = useTranslation();
   const inputRef = useRef<TextInput>(null);
   const [focused, setFocused] = React.useState(false);
+  const [searchOpen, setSearchOpen] = React.useState(false);
 
   const hasPlot = plotNumberValue.trim().length > 0;
-  const guideText = !zoneSelected
-    ? t("habitatCadastre.filterStepZone", "Start by choosing a zone")
-    : !sectorSelected
-      ? t(
-          "habitatCadastre.filterStepQuartier",
-          "Now pick a quartier to load plots",
-        )
-      : t("habitatCadastre.filterStepPlot", "Optional: search a plot number");
+  const anyActive = zoneSelected || sectorSelected || hasPlot;
 
   if (compact) {
     return (
@@ -467,35 +461,19 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
     );
   }
 
+  /* Compact single-bar cadastre filter — a breadcrumb of segments that
+     progressively unlock (Zone › Quartier › Sub-area), a search toggle, and
+     a clear button. Everything lives in ONE row; the plot-number field and
+     the sub-area segment reveal only when relevant, so the map keeps almost
+     all its vertical space. */
   const panel = (
-    <View style={styles.panel}>
-      <View style={styles.guideRow}>
-        <Text style={styles.guideText}>{guideText}</Text>
-        {zoneSelected || sectorSelected || hasPlot ? (
-          <Pressable
-            onPress={onClear}
-            hitSlop={8}
-            style={({ pressed }) => [
-              styles.clearBtn,
-              pressed && { opacity: 0.7 },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={t(
-              "habitatCadastre.clearAll",
-              "Clear selection",
-            )}
-          >
-            <X size={12} color="#374151" weight="bold" />
-          </Pressable>
-        ) : null}
-      </View>
-
-      <View style={styles.filterRow}>
+    <View style={styles.barShell}>
+      <View style={styles.bar}>
+        {/* Zone segment */}
         <Pressable
           style={({ pressed }) => [
-            styles.chip,
-            zoneSelected && styles.chipActive,
-            pressed && { opacity: 0.86 },
+            styles.seg,
+            pressed && { opacity: 0.7 },
           ]}
           onPress={() => {
             Haptics.selectionAsync().catch(() => {});
@@ -503,29 +481,28 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
           }}
         >
           <MapTrifold
-            size={14}
-            color={zoneSelected ? "#1E3A5F" : "#6B7280"}
-            weight="duotone"
+            size={15}
+            color={zoneSelected ? "#1E3A5F" : "#9AA3AF"}
+            weight={zoneSelected ? "fill" : "duotone"}
           />
-          <View style={styles.chipTextWrap}>
-            <Text style={styles.chipLabel}>
-              {t("habitatCadastre.zoneLabel", "Zone")}
-            </Text>
-            <Text style={styles.chipValue} numberOfLines={1}>
-              {zoneSelected
-                ? selectedZoneLabel || t("habitatCadastre.anyZone", "Any")
-                : t("habitatCadastre.tapToSelectZone", "Tap to select")}
-            </Text>
-          </View>
-          <CaretDown size={12} color="#6B7280" weight="bold" />
+          <Text
+            style={[styles.segValue, zoneSelected && styles.segValueActive]}
+            numberOfLines={1}
+          >
+            {zoneSelected
+              ? selectedZoneLabel || t("habitatCadastre.anyZone", "Any")
+              : t("habitatCadastre.zoneLabel", "Zone")}
+          </Text>
         </Pressable>
 
+        <CaretDown size={11} color="#C7CDD4" weight="bold" style={styles.segChevron} />
+
+        {/* Quartier segment */}
         <Pressable
           style={({ pressed }) => [
-            styles.chip,
-            !zoneSelected && styles.chipDisabled,
-            sectorSelected && styles.chipActive,
-            pressed && zoneSelected && { opacity: 0.86 },
+            styles.seg,
+            !zoneSelected && styles.segMuted,
+            pressed && zoneSelected && { opacity: 0.7 },
           ]}
           disabled={!zoneSelected}
           onPress={() => {
@@ -534,33 +511,97 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
           }}
         >
           <Buildings
-            size={14}
-            color={sectorSelected ? "#1E3A5F" : "#6B7280"}
-            weight="duotone"
+            size={15}
+            color={sectorSelected ? "#1E3A5F" : "#9AA3AF"}
+            weight={sectorSelected ? "fill" : "duotone"}
           />
-          <View style={styles.chipTextWrap}>
-            <Text style={styles.chipLabel}>
-              {t("habitatCadastre.quartierLabel", "Quartier")}
-            </Text>
-            <Text style={styles.chipValue} numberOfLines={1}>
-              {!zoneSelected
-                ? t("habitatCadastre.pickZoneFirst", "Select a zone first")
-                : sectorSelected
-                  ? selectedSectorLabel ||
-                    t("habitatCadastre.anyQuartier", "Any")
-                  : t("habitatCadastre.tapToSelectQuartier", "Tap to select")}
-            </Text>
-          </View>
-          <CaretDown size={12} color="#6B7280" weight="bold" />
+          <Text
+            style={[styles.segValue, sectorSelected && styles.segValueActive]}
+            numberOfLines={1}
+          >
+            {sectorSelected
+              ? selectedSectorLabel || t("habitatCadastre.anyQuartier", "Any")
+              : t("habitatCadastre.quartierLabel", "Quartier")}
+          </Text>
         </Pressable>
+
+        {/* Sub-area segment — only when the pinned quartier has sub-areas */}
+        {subSectorAvailable && onOpenSubSector ? (
+          <>
+            <CaretDown size={11} color="#C7CDD4" weight="bold" style={styles.segChevron} />
+            <Pressable
+              style={({ pressed }) => [styles.seg, pressed && { opacity: 0.7 }]}
+              onPress={() => {
+                Haptics.selectionAsync().catch(() => {});
+                onOpenSubSector();
+              }}
+            >
+              <MapPin
+                size={15}
+                color={selectedSubSectorLabel ? "#1E3A5F" : "#9AA3AF"}
+                weight={selectedSubSectorLabel ? "fill" : "duotone"}
+              />
+              <Text
+                style={[
+                  styles.segValue,
+                  selectedSubSectorLabel && styles.segValueActive,
+                ]}
+                numberOfLines={1}
+              >
+                {selectedSubSectorLabel ||
+                  t("habitatCadastre.allSubSectorsShort", "All")}
+              </Text>
+            </Pressable>
+          </>
+        ) : null}
+
+        <View style={styles.barTrailing}>
+          {/* Plot search toggle — enabled once a quartier is pinned */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.iconBtn,
+              (searchOpen || hasPlot) && styles.iconBtnActive,
+              !sectorSelected && styles.iconBtnMuted,
+              pressed && sectorSelected && { opacity: 0.7 },
+            ]}
+            disabled={!sectorSelected}
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              setSearchOpen((v) => !v);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel={t("habitatCadastre.plotNumberSearch", "Search plot")}
+          >
+            <MagnifyingGlass
+              size={15}
+              color={searchOpen || hasPlot ? "#1E3A5F" : "#6B7280"}
+              weight="bold"
+            />
+          </Pressable>
+
+          {anyActive ? (
+            <Pressable
+              onPress={() => {
+                setSearchOpen(false);
+                onClear();
+              }}
+              hitSlop={8}
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
+              accessibilityRole="button"
+              accessibilityLabel={t("habitatCadastre.clearAll", "Clear selection")}
+            >
+              <X size={14} color="#6B7280" weight="bold" />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
-      <View style={styles.searchRow}>
+      {/* Plot-number field — revealed only when the search toggle is on */}
+      {searchOpen && sectorSelected ? (
         <View
           style={[
             styles.searchContainer,
             focused && styles.searchContainerFocused,
-            !sectorSelected && styles.searchContainerMuted,
           ]}
         >
           <Hash size={14} color="#9CA3AF" weight="bold" />
@@ -569,28 +610,21 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
             style={styles.searchInput}
             value={plotNumberValue}
             onChangeText={onPlotNumberChange}
-            placeholder={
-              sectorSelected
-                ? t("habitatCadastre.plotNumberPlaceholder", "Plot number…")
-                : t(
-                    "habitatCadastre.plotNumberHintSelectArea",
-                    "Select an area first to search by plot number.",
-                  )
-            }
+            placeholder={t("habitatCadastre.plotNumberPlaceholder", "Plot number…")}
             placeholderTextColor="#9CA3AF"
             autoCorrect={false}
             autoCapitalize="none"
             returnKeyType="search"
-            editable={sectorSelected}
+            autoFocus
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             onSubmitEditing={() => {
-              if (!hasPlot || plotSearching || !sectorSelected) return;
+              if (!hasPlot || plotSearching) return;
               Haptics.selectionAsync().catch(() => {});
               onPlotSearch();
             }}
           />
-          {hasPlot && sectorSelected ? (
+          {hasPlot ? (
             <Pressable
               style={({ pressed }) => [
                 styles.searchBtn,
@@ -606,41 +640,11 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
               {plotSearching ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <MagnifyingGlass size={12} color="#FFFFFF" weight="bold" />
+                <MagnifyingGlass size={13} color="#FFFFFF" weight="bold" />
               )}
             </Pressable>
           ) : null}
         </View>
-      </View>
-
-      {subSectorAvailable && onOpenSubSector ? (
-        <Pressable
-          style={({ pressed }) => [
-            styles.subSectorChip,
-            selectedSubSectorLabel && styles.chipActive,
-            pressed && { opacity: 0.86 },
-          ]}
-          onPress={() => {
-            Haptics.selectionAsync().catch(() => {});
-            onOpenSubSector();
-          }}
-        >
-          <MapPin
-            size={14}
-            color={selectedSubSectorLabel ? "#1E3A5F" : "#6B7280"}
-            weight="duotone"
-          />
-          <View style={styles.chipTextWrap}>
-            <Text style={styles.chipLabel}>
-              {t("habitatCadastre.subSectorLabel", "Sub-area (optional)")}
-            </Text>
-            <Text style={styles.chipValue} numberOfLines={1}>
-              {selectedSubSectorLabel ||
-                t("habitatCadastre.allSubSectorsShort", "All")}
-            </Text>
-          </View>
-          <CaretDown size={12} color="#6B7280" weight="bold" />
-        </Pressable>
       ) : null}
     </View>
   );
@@ -732,6 +736,77 @@ const styles = StyleSheet.create({
       },
       android: { elevation: 4 },
     }),
+  },
+
+  /* Compact single-bar filter */
+  barShell: {
+    gap: 6,
+  },
+  bar: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.08)",
+    paddingHorizontal: 8,
+    height: 44,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 12,
+      },
+      android: { elevation: 5 },
+    }),
+  },
+  seg: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    flexShrink: 1,
+    minWidth: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+  },
+  segMuted: {
+    opacity: 0.5,
+  },
+  segValue: {
+    flexShrink: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#6B7280",
+    letterSpacing: -0.1,
+  },
+  segValueActive: {
+    color: "#111827",
+    fontWeight: "700",
+  },
+  segChevron: {
+    marginHorizontal: 1,
+    opacity: 0.9,
+  },
+  barTrailing: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    marginLeft: "auto",
+    paddingLeft: 4,
+  },
+  iconBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconBtnActive: {
+    backgroundColor: "#EFF4FB",
+  },
+  iconBtnMuted: {
+    opacity: 0.4,
   },
   guideRow: {
     flexDirection: "row",
@@ -923,11 +998,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    height: 36,
+    height: 42,
+    borderRadius: 12,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#D1D5DB",
-    backgroundColor: "#F9FAFB",
+    borderColor: "rgba(0,0,0,0.08)",
+    backgroundColor: "#FFFFFF",
     paddingHorizontal: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+      },
+      android: { elevation: 3 },
+    }),
   },
   searchContainerFocused: {
     borderColor: "#93C5FD",

@@ -1341,6 +1341,13 @@ export function useHabitatCadastre() {
               ingestPlotGeometryBatch([merged]);
               setPlotGeometryRevision((n) => n + 1);
               setSelectedPlot(merged);
+              // Zoom IN to the plot now that geometry is available. On the
+              // Mapbox tile path the tapped feature is a stub with no
+              // geometry, so the initial focus (above) had nothing to fit —
+              // this is the real zoom-to-plot once the detail resolves.
+              void focusMapOnSelectedPlot(map, merged, region).catch(
+                () => undefined,
+              );
             }
           } catch (err) {
             tapPerf.mark("metadata");

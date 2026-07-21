@@ -386,8 +386,27 @@ export function regionForFocusedPlot(plot: HabitatPlot): Region | null {
   const center = plotAnchorCoordinate(plot) ?? plotLabelCoordinate(plot);
   if (!center || !isValidLatLng(center)) return null;
 
-  const delta = 0.00165;
-  const latShift = delta * 0.42;
+  // Size-aware zoom-IN: base on the plot's own extent so a normal 20–40m
+  // parcel zooms right in (~z17.7) and a large civic plot still fits, but
+  // NEVER zooms out — delta is clamped to a tight, always-zoomed-in band.
+  let span = 0;
+  for (const ring of extractPlotPolygons(plot)) {
+    let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+    for (const c of ring) {
+      if (!isValidLatLng(c)) continue;
+      minLat = Math.min(minLat, c.latitude);
+      maxLat = Math.max(maxLat, c.latitude);
+      minLng = Math.min(minLng, c.longitude);
+      maxLng = Math.max(maxLng, c.longitude);
+    }
+    if (Number.isFinite(minLat)) {
+      span = Math.max(span, maxLat - minLat, maxLng - minLng);
+    }
+  }
+  // ~2.6× the plot span for breathing room, clamped: min 0.0016 (~z17.7,
+  // tight on a small parcel) to max 0.006 (~z15.8, a big civic parcel).
+  const delta = Math.min(0.006, Math.max(0.0016, span * 2.6));
+  const latShift = delta * 0.42; // push plot into the lower third (callout above)
 
   return {
     latitude: center.latitude + latShift,
@@ -421,27 +440,15 @@ export function focusMapOnSelectedPlot(
 ): Promise<void> {
   if (!mapRef) return Promise.resolve();
 
-  const coords = plotFocusCoordinates(plot);
-  if (!coords.length) return Promise.resolve();
-
   const duration = HABITAT_PLOT_FOCUS_MS;
 
-  if (mapRef.fitToCoordinates) {
-    mapRef.fitToCoordinates(coords, {
-      edgePadding: plotCalloutEdgePadding(),
-      animated: true,
-    });
-    return new Promise((resolve) => {
-      setTimeout(resolve, duration + 24);
-    });
-  }
-
+  // ALWAYS zoom IN to the plot via a size-aware region — never fitToCoordinates.
+  // fitToCoordinates + the tall callout edge-padding forced a zoom-OUT to fit
+  // the plot into the small unpadded sliver (the "tapping a plot zooms me out"
+  // bug). A fixed tight region guarantees a consistent zoom-IN with the plot
+  // sitting in the lower third, callout above.
   const target = regionForFocusedPlot(plot);
   if (!target) return Promise.resolve();
-
-  if (!plotFocusNeedsCameraMove(plot, currentRegion)) {
-    return Promise.resolve();
-  }
 
   const animDuration = habitatRegionsSimilar(currentRegion, target)
     ? HABITAT_MAP_ADJUST_MS
