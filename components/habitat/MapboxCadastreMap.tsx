@@ -38,6 +38,7 @@ import {
   regionToZoom,
   regionFromTileJson,
   TILE_BOUNDS_EDGE_PADDING,
+  QUARTIER_MIN_ZOOM,
 } from "../../mapengine/CameraManager";
 import {
   EMPTY_FEATURES,
@@ -324,16 +325,27 @@ function MapboxCadastreMapInner({
     let cancelled = false;
     void getSectorTileJsonCached(selectedSectorId).then((tileJson) => {
       if (cancelled || !tileJson?.bounds) return;
-      const [west, south, east, north] = tileJson.bounds;
-      cameraRef.current?.fitBounds(
-        [east, north],
-        [west, south],
-        [...TILE_BOUNDS_EDGE_PADDING],
-        620,
-      );
+      // Land at a PLOT-VISIBLE zoom, not the raw bounds fit. regionFromTileJson
+      // clamps to the plot-visible band (zoom ≥ ~12.8) so a large quartier
+      // zooms IN enough to actually draw plots instead of fitting the whole
+      // extent below the tile source's minzoom (where nothing renders).
       const region = regionFromTileJson(tileJson);
       if (region) {
+        cameraRef.current?.setCamera({
+          centerCoordinate: [region.longitude, region.latitude],
+          zoomLevel: regionToZoom(region),
+          animationDuration: 620,
+          animationMode: "easeTo",
+        });
         lastRegionKey.current = `${region.latitude.toFixed(5)}:${region.longitude.toFixed(5)}:${region.latitudeDelta.toFixed(5)}`;
+      } else {
+        const [west, south, east, north] = tileJson.bounds;
+        cameraRef.current?.fitBounds(
+          [east, north],
+          [west, south],
+          [...TILE_BOUNDS_EDGE_PADDING],
+          620,
+        );
       }
     });
     return () => {
@@ -410,7 +422,10 @@ function MapboxCadastreMapInner({
           centerCoordinate: regionToCenter(initialRegion),
           zoomLevel: regionToZoom(initialRegion),
         }}
-        minZoomLevel={2}
+        // While a quartier is pinned, floor the zoom at the plot-visible
+        // level so zooming out can't drop below the tile source and blank
+        // the plots. Browsing zones/sectors keeps the full range.
+        minZoomLevel={selectedSectorId != null ? QUARTIER_MIN_ZOOM : 2}
         maxZoomLevel={20}
       />
 

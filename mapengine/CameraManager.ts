@@ -31,7 +31,19 @@ export function cameraStateToRegion(center: [number, number], zoom: number): Reg
 /** Fit padding for quartier MVT bounds (top, right, bottom, left). */
 export const TILE_BOUNDS_EDGE_PADDING = [72, 48, 148, 48] as const;
 
-const QUARTIER_VIEW_ZOOM = { minDelta: 0.03, maxDelta: 0.1 };
+/**
+ * Plot tiles exist only at zoom ≥ 12 (source minZoomLevel). If the camera
+ * lands below that — which raw fitBounds does for a large quartier — plots
+ * don't render at all. Clamp the quartier view so it ALWAYS settles in the
+ * plot-visible band: maxDelta 0.045 ≈ zoom 12.8 (plots clearly visible),
+ * minDelta 0.015 ≈ zoom 14.4. A big quartier shows its center zoomed-in
+ * with plots drawn (pan to explore) rather than the whole extent with
+ * nothing rendered.
+ */
+const QUARTIER_VIEW_ZOOM = { minDelta: 0.015, maxDelta: 0.045 };
+
+/** Camera never sits below this while a quartier is pinned — keeps plots on-screen. */
+export const QUARTIER_MIN_ZOOM = 12;
 
 /** TileJSON bounds are [west, south, east, north]. */
 export function regionFromTileJson(
