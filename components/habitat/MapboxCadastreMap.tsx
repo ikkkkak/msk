@@ -426,7 +426,7 @@ function MapboxCadastreMapInner({
         // level so zooming out can't drop below the tile source and blank
         // the plots. Browsing zones/sectors keeps the full range.
         minZoomLevel={selectedSectorId != null ? QUARTIER_MIN_ZOOM : 2}
-        maxZoomLevel={20}
+        maxZoomLevel={22}
       />
 
       {plansGeo.features.length > 0 ? (
@@ -500,7 +500,10 @@ function MapboxCadastreMapInner({
           id={PLOT_SOURCE_ID}
           tileUrlTemplates={[plotTileUrl]}
           minZoomLevel={12}
-          maxZoomLevel={20}
+          // Matches the server's tile maxzoom (22). Above this the source
+          // overzooms the deepest tile instead of requesting non-existent
+          // (204) tiles that would blank the plots mid-zoom.
+          maxZoomLevel={22}
           onPress={handlePlotPress}
         >
           <Mapbox.FillLayer
