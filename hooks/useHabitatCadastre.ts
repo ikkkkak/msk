@@ -58,7 +58,10 @@ import {
   selectPlotsToDraw,
 } from "../utils/habitatViewportPlots";
 import { CadastrePerfTrace } from "../utils/habitatCadastrePerf";
-import { isPlotRenderingHandledExternally } from "../utils/habitatCadastreRenderer";
+import {
+  isPlotRenderingHandledExternally,
+  isCadastreGpuMapActive,
+} from "../utils/habitatCadastreRenderer";
 import { USE_HABITAT_RASTER_OVERLAY } from "../utils/habitatRasterOverlay";
 import { prefetchSectorRasterTiles } from "../utils/habitatRasterPrefetch";
 import {
@@ -753,6 +756,46 @@ export function useHabitatCadastre() {
           setLoadingPlots(false);
           setMapNavigating(false);
         }
+
+        // ── Mapbox GPU fast path ──────────────────────────────────────────
+        // The GPU map renders plots from server vector tiles and fits the
+        // camera from TileJSON bounds (done in MapboxCadastreMap) — neither
+        // needs the per-plot metadata list. Fetching all plots here (e.g.
+        // 7,798 rows across 16 requests + JSON decode ≈ 1.7s) blocked the
+        // "getting your plan" window for data the map never uses. Defer it:
+        // hydrate sectorPlots in the BACKGROUND for the only two remaining
+        // consumers — sub-sector camera framing (3 quartiers, centroid
+        // fallback) and plot-tap pre-fill (tap does its own detail fetch
+        // regardless). The quartier now appears at pure tile speed.
+        if (isCadastreGpuMapActive() && gen === applyGen.current) {
+          setSectorMetadataReady(true);
+          setPlotsGeometryReady(true);
+          setPlotGeometryRevision((n) => n + 1);
+          lastSectorViewportHash.current = "";
+          lastPlotFetchRegion.current = null;
+          quartierPerf.mark("camera");
+          quartierPerf.finish({
+            sector_id: sectorId,
+            plots_loaded: 0,
+            plots_drawn: 0,
+            plots_with_geometry: 0,
+            fetch_path: "vector_tiles (metadata deferred to background)",
+            render_mode: "vector_tiles_gpu",
+          });
+
+          void fetchSectorPlotsCached(sectorId, queryClient)
+            .then((res) => {
+              if (gen !== applyGen.current) return;
+              setSectorPlots(res.plots);
+              if (res.total > 0) setSectorPlotTotal(res.total);
+              setPlotsTruncated(res.truncated || res.plots.length < res.total);
+            })
+            .catch(() => {
+              /* background hydration — tile rendering is unaffected */
+            });
+          return;
+        }
+        // ──────────────────────────────────────────────────────────────────
 
         const plotResult = await fetchSectorPlotsCached(sectorId, queryClient);
         if (gen !== applyGen.current) return;
