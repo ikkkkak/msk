@@ -5258,7 +5258,11 @@
     },
     "subSectorLabel": "Sub-area (optional)",
     "allSubSectorsShort": "All",
-    "searchPlotByNumber": "Search a plot by number"
+    "searchPlotByNumber": "Search a plot by number",
+    "locateTitleZone": "Choose your area",
+    "locateHintZone": "Tap to pick a zone",
+    "locateHintQuartier": "Next — choose a quartier",
+    "locateHintChange": "Tap to change"
   },
   "apiErrors": {
     "serverUnreachableTitle": "Connection problem",

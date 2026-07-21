@@ -279,7 +279,6 @@ import {
   CaretDown,
   MagnifyingGlass,
   X,
-  MapTrifold,
   Buildings,
   Hash,
   MapPin,
@@ -461,96 +460,69 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
     );
   }
 
-  /* Clear, labelled cadastre filter. Default state = just two big labelled
-     cards (Zone, Quartier) so a first-time user immediately understands
-     what to tap. The plot-number search and the sub-area card reveal only
-     AFTER a quartier is chosen (progressive disclosure) — clear when you
-     need them, out of the way when you don't. */
-  const Card = ({
-    icon,
-    label,
-    value,
-    prompt,
-    filled,
-    disabled,
-    onPress,
-  }: {
-    icon: React.ReactNode;
-    label: string;
-    value?: string;
-    prompt: string;
-    filled: boolean;
-    disabled?: boolean;
-    onPress: () => void;
-  }) => (
-    <Pressable
-      style={({ pressed }) => [
-        styles.card,
-        filled && styles.cardFilled,
-        disabled && styles.cardDisabled,
-        pressed && !disabled && { opacity: 0.85 },
-      ]}
-      disabled={disabled}
-      onPress={() => {
-        if (disabled) return;
-        Haptics.selectionAsync().catch(() => {});
-        onPress();
-      }}
-      accessibilityRole="button"
-      accessibilityLabel={`${label}: ${filled ? value : prompt}`}
-    >
-      <View style={[styles.cardIcon, filled && styles.cardIconFilled]}>
-        {icon}
-      </View>
-      <View style={styles.cardText}>
-        <Text style={styles.cardLabel}>{label}</Text>
-        <Text
-          style={[styles.cardValue, !filled && styles.cardPrompt]}
-          numberOfLines={1}
-        >
-          {filled ? value : prompt}
-        </Text>
-      </View>
-      <CaretDown size={13} color="#9CA3AF" weight="bold" />
-    </Pressable>
-  );
+  /* Airbnb / Zillow-style location bar. A single prominent element that
+     always states WHERE you are and WHAT to do next, and routes to the
+     right picker on tap. One clear thing to press — no parallel dropdowns
+     to decode. Plot search + sub-area reveal only after a quartier is set. */
+  const step = !zoneSelected ? "zone" : !sectorSelected ? "quartier" : "done";
+  const barTitle =
+    step === "zone"
+      ? t("habitatCadastre.locateTitleZone", "Choose your area")
+      : step === "quartier"
+        ? selectedZoneLabel || t("habitatCadastre.zoneLabel", "Zone")
+        : selectedSectorLabel || t("habitatCadastre.quartierLabel", "Quartier");
+  const barSubtitle =
+    step === "zone"
+      ? t("habitatCadastre.locateHintZone", "Tap to pick a zone")
+      : step === "quartier"
+        ? t("habitatCadastre.locateHintQuartier", "Next — choose a quartier")
+        : `${selectedZoneLabel || ""}${
+            selectedSubSectorLabel ? " · " + selectedSubSectorLabel : ""
+          }`.trim() || t("habitatCadastre.locateHintChange", "Tap to change");
+  const barOnPress = step === "zone" ? onOpenZone : onOpenSector;
 
   const panel = (
     <View style={styles.barShell}>
-      <View style={styles.cardsRow}>
-        <Card
-          icon={
-            <MapTrifold
-              size={17}
-              color={zoneSelected ? "#1E3A5F" : "#9AA3AF"}
-              weight="duotone"
-            />
-          }
-          label={t("habitatCadastre.zoneLabel", "Zone")}
-          value={selectedZoneLabel}
-          prompt={t("habitatCadastre.tapToSelectZone", "Choose")}
-          filled={zoneSelected}
-          onPress={onOpenZone}
-        />
-        <Card
-          icon={
-            <Buildings
-              size={17}
-              color={sectorSelected ? "#1E3A5F" : "#9AA3AF"}
-              weight="duotone"
-            />
-          }
-          label={t("habitatCadastre.quartierLabel", "Quartier")}
-          value={selectedSectorLabel}
-          prompt={
-            zoneSelected
-              ? t("habitatCadastre.tapToSelectQuartier", "Choose")
-              : t("habitatCadastre.pickZoneFirst", "Zone first")
-          }
-          filled={sectorSelected}
-          disabled={!zoneSelected}
-          onPress={onOpenSector}
-        />
+      <View style={styles.locateRow}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.locateBar,
+            step !== "zone" && styles.locateBarActive,
+            pressed && { opacity: 0.9 },
+          ]}
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            barOnPress();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`${barTitle}. ${barSubtitle}`}
+        >
+          <View
+            style={[styles.locateBadge, step !== "zone" && styles.locateBadgeActive]}
+          >
+            {step === "done" ? (
+              <Buildings size={18} color="#FFFFFF" weight="fill" />
+            ) : (
+              <MapPin
+                size={18}
+                color={step === "zone" ? "#FFFFFF" : "#FFFFFF"}
+                weight="fill"
+              />
+            )}
+          </View>
+          <View style={styles.locateText}>
+            <Text style={styles.locateTitle} numberOfLines={1}>
+              {barTitle}
+            </Text>
+            <Text style={styles.locateSubtitle} numberOfLines={1}>
+              {barSubtitle}
+            </Text>
+          </View>
+          <View style={styles.locateChevron}>
+            <CaretDown size={15} color="#1E3A5F" weight="bold" />
+          </View>
+        </Pressable>
+
         {anyActive ? (
           <Pressable
             onPress={() => {
@@ -570,22 +542,28 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
         ) : null}
       </View>
 
-      {/* Sub-area card — only when the pinned quartier actually has sub-areas */}
+      {/* Sub-area chip — only when the pinned quartier actually has sub-areas */}
       {sectorSelected && subSectorAvailable && onOpenSubSector ? (
-        <Card
-          icon={
-            <MapPin
-              size={17}
-              color={selectedSubSectorLabel ? "#1E3A5F" : "#9AA3AF"}
-              weight="duotone"
-            />
-          }
-          label={t("habitatCadastre.subSectorLabel", "Sub-area")}
-          value={selectedSubSectorLabel}
-          prompt={t("habitatCadastre.allSubSectorsShort", "All")}
-          filled={!!selectedSubSectorLabel}
-          onPress={onOpenSubSector}
-        />
+        <Pressable
+          style={({ pressed }) => [
+            styles.subRow,
+            pressed && { opacity: 0.85 },
+          ]}
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            onOpenSubSector();
+          }}
+        >
+          <MapPin size={15} color="#6B7280" weight="duotone" />
+          <Text style={styles.subRowLabel}>
+            {t("habitatCadastre.subSectorLabel", "Sub-area")}
+          </Text>
+          <Text style={styles.subRowValue} numberOfLines={1}>
+            {selectedSubSectorLabel ||
+              t("habitatCadastre.allSubSectorsShort", "All")}
+          </Text>
+          <CaretDown size={13} color="#9CA3AF" weight="bold" />
+        </Pressable>
       ) : null}
 
       {/* Plot-number search — a clear labelled button that expands the field,
@@ -765,74 +743,108 @@ const styles = StyleSheet.create({
     }),
   },
 
-  /* Clear labelled-card filter */
+  /* Airbnb/Zillow-style single location bar */
   barShell: {
     gap: 8,
   },
-  cardsRow: {
+  locateRow: {
     flexDirection: "row",
-    alignItems: "stretch",
+    alignItems: "center",
     gap: 8,
   },
-  card: {
+  locateBar: {
     flex: 1,
     minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
-    gap: 9,
+    gap: 11,
     backgroundColor: "#FFFFFF",
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(0,0,0,0.08)",
-    paddingHorizontal: 11,
+    borderColor: "rgba(0,0,0,0.07)",
+    paddingHorizontal: 10,
     paddingVertical: 9,
     ...Platform.select({
       ios: {
         shadowColor: "#000",
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.09,
-        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.12,
+        shadowRadius: 14,
       },
-      android: { elevation: 4 },
+      android: { elevation: 6 },
     }),
   },
-  cardFilled: {
-    borderColor: "rgba(30,58,95,0.22)",
+  locateBarActive: {
+    borderColor: "rgba(30,58,95,0.16)",
   },
-  cardDisabled: {
-    opacity: 0.5,
-  },
-  cardIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: "#F3F4F6",
+  locateBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#9AA3AF",
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
   },
-  cardIconFilled: {
-    backgroundColor: "#EAF1FA",
+  locateBadgeActive: {
+    backgroundColor: "#1E3A5F",
   },
-  cardText: {
+  locateText: {
     flex: 1,
     minWidth: 0,
   },
-  cardLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#8A929C",
-    marginBottom: 1,
-  },
-  cardValue: {
-    fontSize: 14,
+  locateTitle: {
+    fontSize: 15,
     fontWeight: "700",
     color: "#111827",
     letterSpacing: -0.2,
   },
-  cardPrompt: {
+  locateSubtitle: {
+    fontSize: 12,
+    fontWeight: "500",
+    color: "#8A929C",
+    marginTop: 1,
+  },
+  locateChevron: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "#EEF2F7",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  subRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    height: 40,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.07)",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 12,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+      },
+      android: { elevation: 3 },
+    }),
+  },
+  subRowLabel: {
+    fontSize: 12,
     fontWeight: "600",
-    color: "#1E3A5F",
+    color: "#8A929C",
+  },
+  subRowValue: {
+    flex: 1,
+    textAlign: "right",
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111827",
   },
   clearRound: {
     width: 38,

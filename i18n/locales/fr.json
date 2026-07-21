@@ -5444,7 +5444,11 @@
     },
     "subSectorLabel": "Sous-zone (optionnel)",
     "allSubSectorsShort": "Tout",
-    "searchPlotByNumber": "Rechercher une parcelle par numéro"
+    "searchPlotByNumber": "Rechercher une parcelle par numéro",
+    "locateTitleZone": "Choisissez votre zone",
+    "locateHintZone": "Touchez pour choisir une zone",
+    "locateHintQuartier": "Ensuite — choisissez un quartier",
+    "locateHintChange": "Touchez pour modifier"
   },
   "broker": {
     "dashboard": {

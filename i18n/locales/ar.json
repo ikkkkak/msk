@@ -5455,7 +5455,11 @@
     },
     "subSectorLabel": "منطقة فرعية (اختياري)",
     "allSubSectorsShort": "الكل",
-    "searchPlotByNumber": "ابحث عن قطعة بالرقم"
+    "searchPlotByNumber": "ابحث عن قطعة بالرقم",
+    "locateTitleZone": "اختر منطقتك",
+    "locateHintZone": "اضغط لاختيار منطقة",
+    "locateHintQuartier": "التالي — اختر حياً",
+    "locateHintChange": "اضغط للتغيير"
   },
   "broker": {
     "dashboard": {
