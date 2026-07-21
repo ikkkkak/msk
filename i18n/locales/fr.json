@@ -5443,7 +5443,8 @@
       "forSaleDetailsNotFound": "Les détails de vente ne sont pas encore disponibles pour cette parcelle."
     },
     "subSectorLabel": "Sous-zone (optionnel)",
-    "allSubSectorsShort": "Tout"
+    "allSubSectorsShort": "Tout",
+    "searchPlotByNumber": "Rechercher une parcelle par numéro"
   },
   "broker": {
     "dashboard": {

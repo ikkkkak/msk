@@ -461,190 +461,217 @@ export const CadastreMapFilterBar = memo(function CadastreMapFilterBar({
     );
   }
 
-  /* Compact single-bar cadastre filter — a breadcrumb of segments that
-     progressively unlock (Zone › Quartier › Sub-area), a search toggle, and
-     a clear button. Everything lives in ONE row; the plot-number field and
-     the sub-area segment reveal only when relevant, so the map keeps almost
-     all its vertical space. */
+  /* Clear, labelled cadastre filter. Default state = just two big labelled
+     cards (Zone, Quartier) so a first-time user immediately understands
+     what to tap. The plot-number search and the sub-area card reveal only
+     AFTER a quartier is chosen (progressive disclosure) — clear when you
+     need them, out of the way when you don't. */
+  const Card = ({
+    icon,
+    label,
+    value,
+    prompt,
+    filled,
+    disabled,
+    onPress,
+  }: {
+    icon: React.ReactNode;
+    label: string;
+    value?: string;
+    prompt: string;
+    filled: boolean;
+    disabled?: boolean;
+    onPress: () => void;
+  }) => (
+    <Pressable
+      style={({ pressed }) => [
+        styles.card,
+        filled && styles.cardFilled,
+        disabled && styles.cardDisabled,
+        pressed && !disabled && { opacity: 0.85 },
+      ]}
+      disabled={disabled}
+      onPress={() => {
+        if (disabled) return;
+        Haptics.selectionAsync().catch(() => {});
+        onPress();
+      }}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${filled ? value : prompt}`}
+    >
+      <View style={[styles.cardIcon, filled && styles.cardIconFilled]}>
+        {icon}
+      </View>
+      <View style={styles.cardText}>
+        <Text style={styles.cardLabel}>{label}</Text>
+        <Text
+          style={[styles.cardValue, !filled && styles.cardPrompt]}
+          numberOfLines={1}
+        >
+          {filled ? value : prompt}
+        </Text>
+      </View>
+      <CaretDown size={13} color="#9CA3AF" weight="bold" />
+    </Pressable>
+  );
+
   const panel = (
     <View style={styles.barShell}>
-      <View style={styles.bar}>
-        {/* Zone segment */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.seg,
-            pressed && { opacity: 0.7 },
-          ]}
-          onPress={() => {
-            Haptics.selectionAsync().catch(() => {});
-            onOpenZone();
-          }}
-        >
-          <MapTrifold
-            size={15}
-            color={zoneSelected ? "#1E3A5F" : "#9AA3AF"}
-            weight={zoneSelected ? "fill" : "duotone"}
-          />
-          <Text
-            style={[styles.segValue, zoneSelected && styles.segValueActive]}
-            numberOfLines={1}
-          >
-            {zoneSelected
-              ? selectedZoneLabel || t("habitatCadastre.anyZone", "Any")
-              : t("habitatCadastre.zoneLabel", "Zone")}
-          </Text>
-        </Pressable>
-
-        <CaretDown size={11} color="#C7CDD4" weight="bold" style={styles.segChevron} />
-
-        {/* Quartier segment */}
-        <Pressable
-          style={({ pressed }) => [
-            styles.seg,
-            !zoneSelected && styles.segMuted,
-            pressed && zoneSelected && { opacity: 0.7 },
-          ]}
-          disabled={!zoneSelected}
-          onPress={() => {
-            Haptics.selectionAsync().catch(() => {});
-            onOpenSector();
-          }}
-        >
-          <Buildings
-            size={15}
-            color={sectorSelected ? "#1E3A5F" : "#9AA3AF"}
-            weight={sectorSelected ? "fill" : "duotone"}
-          />
-          <Text
-            style={[styles.segValue, sectorSelected && styles.segValueActive]}
-            numberOfLines={1}
-          >
-            {sectorSelected
-              ? selectedSectorLabel || t("habitatCadastre.anyQuartier", "Any")
-              : t("habitatCadastre.quartierLabel", "Quartier")}
-          </Text>
-        </Pressable>
-
-        {/* Sub-area segment — only when the pinned quartier has sub-areas */}
-        {subSectorAvailable && onOpenSubSector ? (
-          <>
-            <CaretDown size={11} color="#C7CDD4" weight="bold" style={styles.segChevron} />
-            <Pressable
-              style={({ pressed }) => [styles.seg, pressed && { opacity: 0.7 }]}
-              onPress={() => {
-                Haptics.selectionAsync().catch(() => {});
-                onOpenSubSector();
-              }}
-            >
-              <MapPin
-                size={15}
-                color={selectedSubSectorLabel ? "#1E3A5F" : "#9AA3AF"}
-                weight={selectedSubSectorLabel ? "fill" : "duotone"}
-              />
-              <Text
-                style={[
-                  styles.segValue,
-                  selectedSubSectorLabel && styles.segValueActive,
-                ]}
-                numberOfLines={1}
-              >
-                {selectedSubSectorLabel ||
-                  t("habitatCadastre.allSubSectorsShort", "All")}
-              </Text>
-            </Pressable>
-          </>
-        ) : null}
-
-        <View style={styles.barTrailing}>
-          {/* Plot search toggle — enabled once a quartier is pinned */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.iconBtn,
-              (searchOpen || hasPlot) && styles.iconBtnActive,
-              !sectorSelected && styles.iconBtnMuted,
-              pressed && sectorSelected && { opacity: 0.7 },
-            ]}
-            disabled={!sectorSelected}
-            onPress={() => {
-              Haptics.selectionAsync().catch(() => {});
-              setSearchOpen((v) => !v);
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={t("habitatCadastre.plotNumberSearch", "Search plot")}
-          >
-            <MagnifyingGlass
-              size={15}
-              color={searchOpen || hasPlot ? "#1E3A5F" : "#6B7280"}
-              weight="bold"
+      <View style={styles.cardsRow}>
+        <Card
+          icon={
+            <MapTrifold
+              size={17}
+              color={zoneSelected ? "#1E3A5F" : "#9AA3AF"}
+              weight="duotone"
             />
+          }
+          label={t("habitatCadastre.zoneLabel", "Zone")}
+          value={selectedZoneLabel}
+          prompt={t("habitatCadastre.tapToSelectZone", "Choose")}
+          filled={zoneSelected}
+          onPress={onOpenZone}
+        />
+        <Card
+          icon={
+            <Buildings
+              size={17}
+              color={sectorSelected ? "#1E3A5F" : "#9AA3AF"}
+              weight="duotone"
+            />
+          }
+          label={t("habitatCadastre.quartierLabel", "Quartier")}
+          value={selectedSectorLabel}
+          prompt={
+            zoneSelected
+              ? t("habitatCadastre.tapToSelectQuartier", "Choose")
+              : t("habitatCadastre.pickZoneFirst", "Zone first")
+          }
+          filled={sectorSelected}
+          disabled={!zoneSelected}
+          onPress={onOpenSector}
+        />
+        {anyActive ? (
+          <Pressable
+            onPress={() => {
+              setSearchOpen(false);
+              onClear();
+            }}
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.clearRound,
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={t("habitatCadastre.clearAll", "Clear selection")}
+          >
+            <X size={15} color="#6B7280" weight="bold" />
           </Pressable>
-
-          {anyActive ? (
-            <Pressable
-              onPress={() => {
-                setSearchOpen(false);
-                onClear();
-              }}
-              hitSlop={8}
-              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.7 }]}
-              accessibilityRole="button"
-              accessibilityLabel={t("habitatCadastre.clearAll", "Clear selection")}
-            >
-              <X size={14} color="#6B7280" weight="bold" />
-            </Pressable>
-          ) : null}
-        </View>
+        ) : null}
       </View>
 
-      {/* Plot-number field — revealed only when the search toggle is on */}
-      {searchOpen && sectorSelected ? (
-        <View
-          style={[
-            styles.searchContainer,
-            focused && styles.searchContainerFocused,
-          ]}
-        >
-          <Hash size={14} color="#9CA3AF" weight="bold" />
-          <TextInput
-            ref={inputRef}
-            style={styles.searchInput}
-            value={plotNumberValue}
-            onChangeText={onPlotNumberChange}
-            placeholder={t("habitatCadastre.plotNumberPlaceholder", "Plot number…")}
-            placeholderTextColor="#9CA3AF"
-            autoCorrect={false}
-            autoCapitalize="none"
-            returnKeyType="search"
-            autoFocus
-            onFocus={() => setFocused(true)}
-            onBlur={() => setFocused(false)}
-            onSubmitEditing={() => {
-              if (!hasPlot || plotSearching) return;
-              Haptics.selectionAsync().catch(() => {});
-              onPlotSearch();
-            }}
-          />
-          {hasPlot ? (
-            <Pressable
-              style={({ pressed }) => [
-                styles.searchBtn,
-                pressed && { opacity: 0.82 },
-                plotSearching && styles.searchBtnSearching,
-              ]}
-              onPress={() => {
-                if (plotSearching) return;
+      {/* Sub-area card — only when the pinned quartier actually has sub-areas */}
+      {sectorSelected && subSectorAvailable && onOpenSubSector ? (
+        <Card
+          icon={
+            <MapPin
+              size={17}
+              color={selectedSubSectorLabel ? "#1E3A5F" : "#9AA3AF"}
+              weight="duotone"
+            />
+          }
+          label={t("habitatCadastre.subSectorLabel", "Sub-area")}
+          value={selectedSubSectorLabel}
+          prompt={t("habitatCadastre.allSubSectorsShort", "All")}
+          filled={!!selectedSubSectorLabel}
+          onPress={onOpenSubSector}
+        />
+      ) : null}
+
+      {/* Plot-number search — a clear labelled button that expands the field,
+          shown only once a quartier is chosen. */}
+      {sectorSelected ? (
+        searchOpen ? (
+          <View
+            style={[
+              styles.searchContainer,
+              focused && styles.searchContainerFocused,
+            ]}
+          >
+            <Hash size={15} color="#9CA3AF" weight="bold" />
+            <TextInput
+              ref={inputRef}
+              style={styles.searchInput}
+              value={plotNumberValue}
+              onChangeText={onPlotNumberChange}
+              placeholder={t(
+                "habitatCadastre.plotNumberPlaceholder",
+                "Plot number…",
+              )}
+              placeholderTextColor="#9CA3AF"
+              autoCorrect={false}
+              autoCapitalize="none"
+              returnKeyType="search"
+              autoFocus
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              onSubmitEditing={() => {
+                if (!hasPlot || plotSearching) return;
                 Haptics.selectionAsync().catch(() => {});
                 onPlotSearch();
               }}
-            >
-              {plotSearching ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <MagnifyingGlass size={13} color="#FFFFFF" weight="bold" />
+            />
+            {hasPlot ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.searchBtn,
+                  pressed && { opacity: 0.82 },
+                  plotSearching && styles.searchBtnSearching,
+                ]}
+                onPress={() => {
+                  if (plotSearching) return;
+                  Haptics.selectionAsync().catch(() => {});
+                  onPlotSearch();
+                }}
+              >
+                {plotSearching ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.searchBtnText}>
+                    {t("habitatCadastre.plotNumberSearch", "Search")}
+                  </Text>
+                )}
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={() => setSearchOpen(false)}
+                hitSlop={8}
+                style={styles.searchCollapse}
+              >
+                <X size={13} color="#9CA3AF" weight="bold" />
+              </Pressable>
+            )}
+          </View>
+        ) : (
+          <Pressable
+            style={({ pressed }) => [
+              styles.searchOpener,
+              pressed && { opacity: 0.85 },
+            ]}
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              setSearchOpen(true);
+            }}
+          >
+            <MagnifyingGlass size={15} color="#6B7280" weight="bold" />
+            <Text style={styles.searchOpenerText}>
+              {t(
+                "habitatCadastre.searchPlotByNumber",
+                "Search a plot by number",
               )}
-            </Pressable>
-          ) : null}
-        </View>
+            </Text>
+          </Pressable>
+        )
       ) : null}
     </View>
   );
@@ -738,75 +765,128 @@ const styles = StyleSheet.create({
     }),
   },
 
-  /* Compact single-bar filter */
+  /* Clear labelled-card filter */
   barShell: {
-    gap: 6,
+    gap: 8,
   },
-  bar: {
+  cardsRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    gap: 8,
+  },
+  card: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "center",
+    gap: 9,
     backgroundColor: "#FFFFFF",
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: "rgba(0,0,0,0.08)",
-    paddingHorizontal: 8,
-    height: 44,
+    paddingHorizontal: 11,
+    paddingVertical: 9,
     ...Platform.select({
       ios: {
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.1,
+        shadowOpacity: 0.09,
         shadowRadius: 12,
       },
-      android: { elevation: 5 },
+      android: { elevation: 4 },
     }),
   },
-  seg: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    flexShrink: 1,
-    minWidth: 0,
-    paddingHorizontal: 6,
-    paddingVertical: 6,
+  cardFilled: {
+    borderColor: "rgba(30,58,95,0.22)",
   },
-  segMuted: {
+  cardDisabled: {
     opacity: 0.5,
   },
-  segValue: {
-    flexShrink: 1,
-    fontSize: 13,
+  cardIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  cardIconFilled: {
+    backgroundColor: "#EAF1FA",
+  },
+  cardText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  cardLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#8A929C",
+    marginBottom: 1,
+  },
+  cardValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#111827",
+    letterSpacing: -0.2,
+  },
+  cardPrompt: {
+    fontWeight: "600",
+    color: "#1E3A5F",
+  },
+  clearRound: {
+    width: 38,
+    alignSelf: "center",
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.08)",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 8,
+      },
+      android: { elevation: 3 },
+    }),
+  },
+  searchOpener: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    height: 42,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(0,0,0,0.08)",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 13,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+      },
+      android: { elevation: 3 },
+    }),
+  },
+  searchOpenerText: {
+    fontSize: 13.5,
     fontWeight: "600",
     color: "#6B7280",
     letterSpacing: -0.1,
   },
-  segValueActive: {
-    color: "#111827",
-    fontWeight: "700",
-  },
-  segChevron: {
-    marginHorizontal: 1,
-    opacity: 0.9,
-  },
-  barTrailing: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-    marginLeft: "auto",
-    paddingLeft: 4,
-  },
-  iconBtn: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
+  searchCollapse: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-  },
-  iconBtnActive: {
-    backgroundColor: "#EFF4FB",
-  },
-  iconBtnMuted: {
-    opacity: 0.4,
+    backgroundColor: "#F3F4F6",
   },
   guideRow: {
     flexDirection: "row",
