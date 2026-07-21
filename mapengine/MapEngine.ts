@@ -14,8 +14,30 @@
  */
 import Constants from "expo-constants";
 
-export const MAPBOX_ACCESS_TOKEN =
-  process.env.EXPO_PUBLIC_MAPBOX_TOKEN?.trim() ?? "";
+/**
+ * Resolve the Mapbox token from every place a build can surface it, in
+ * order: the inlined EXPO_PUBLIC_ env var (local Metro / build env), then
+ * app config `extra.mapboxToken` (set by app.config.js — survives when the
+ * env var isn't inlined into the JS bundle, e.g. some CI paths). A `pk.`
+ * token is a PUBLIC client token by design (it ships in every map request);
+ * the only real protection is URL/scope restrictions on the Mapbox side,
+ * not secrecy — so reading it from config is safe and does NOT hardcode it
+ * into the committed source.
+ */
+function resolveMapboxToken(): string {
+  const fromEnv = process.env.EXPO_PUBLIC_MAPBOX_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+  const extra =
+    (Constants.expoConfig?.extra as { mapboxToken?: string } | undefined) ??
+    (Constants.manifest2?.extra?.expoClient?.extra as
+      | { mapboxToken?: string }
+      | undefined);
+  const fromExtra = extra?.mapboxToken?.trim();
+  if (fromExtra) return fromExtra;
+  return "";
+}
+
+export const MAPBOX_ACCESS_TOKEN = resolveMapboxToken();
 
 /** Professional basemap styles — street + satellite tiers. */
 export const MAPBOX_STYLE_STREETS = "mapbox://styles/mapbox/streets-v12";
@@ -28,17 +50,30 @@ export function mapboxStyleForMapType(mapType: CadastreMapType): string {
   return mapType === "standard" ? MAPBOX_STYLE_STREETS : MAPBOX_STYLE_SATELLITE;
 }
 
+/** One-line reason the engine can/can't use Mapbox — logged once for diagnosis. */
+export function mapboxLoadBlockReason(): string | null {
+  if (!MAPBOX_ACCESS_TOKEN) return "no Mapbox token at runtime (EXPO_PUBLIC_MAPBOX_TOKEN / extra.mapboxToken both empty)";
+  try {
+    // Expo Go cannot host custom native modules. Detect ONLY the real Expo
+    // Go runtime — a dev/standalone build must never be misclassified here.
+    if (Constants.executionEnvironment === "storeClient") return "running in Expo Go (storeClient) — dev build required";
+  } catch {
+    /* unknown runtime — allow the attempt */
+  }
+  return null;
+}
+
 /**
  * True when this runtime can host the Mapbox native module at all.
- * Expo Go ("storeClient") cannot — custom native modules aren't bundled.
+ * Deliberately does NOT check the deprecated `appOwnership` (it can read
+ * "expo" on some dev builds and wrongly force the fallback) — the
+ * executionEnvironment storeClient check is the reliable Expo Go signal.
  */
 export function canAttemptMapboxLoad(): boolean {
-  if (!MAPBOX_ACCESS_TOKEN) return false;
-  try {
-    if (Constants.appOwnership === "expo") return false;
-    if (Constants.executionEnvironment === "storeClient") return false;
-  } catch {
-    /* default to attempting on unknown runtimes */
+  const reason = mapboxLoadBlockReason();
+  if (reason) {
+    console.warn("[MapEngine] Mapbox unavailable →", reason);
+    return false;
   }
   return true;
 }

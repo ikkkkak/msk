@@ -20,7 +20,10 @@ export type CadastreEngine = "mapbox" | "fallback";
 
 export function resolveCadastreEngine(): CadastreEngine {
   if (!USE_MAPBOX_CADASTRE) return "fallback";
-  if (isMapboxRuntimeFailed()) return "fallback";
-  if (!canAttemptMapboxLoad()) return "fallback";
+  if (isMapboxRuntimeFailed()) {
+    // A prior load/mount error already downgraded this session (logged then).
+    return "fallback";
+  }
+  if (!canAttemptMapboxLoad()) return "fallback"; // logs its own reason
   return "mapbox";
 }

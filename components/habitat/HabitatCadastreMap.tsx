@@ -272,7 +272,17 @@ export function HabitatCadastreMap({
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          markMapboxRuntimeFailed(err instanceof Error ? err.message : String(err));
+          const msg = err instanceof Error ? err.message : String(err);
+          // Almost always means the @rnmapbox/maps NATIVE module isn't in
+          // this binary — i.e. the app is an OLD dev build made before
+          // Mapbox was added. JS reload alone can't fix it; a fresh native
+          // build (eas build / prebuild) that bundles the SDK is required.
+          console.error(
+            "[MapEngine] Mapbox module failed to load → falling back to native map. " +
+              "Likely running a dev build WITHOUT the @rnmapbox/maps native module — rebuild the app. Detail:",
+            msg,
+          );
+          markMapboxRuntimeFailed(msg);
           setMapboxCadastre(null);
           setMapboxFailed(true);
         }
