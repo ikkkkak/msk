@@ -3005,8 +3005,21 @@ const SearchScreenInternal = ({
                 setActualHeaderHeight(totalHeight);
               }}
             >
-              {/* Tab Navigation + MeskenyGPT entry */}
-              <View style={styles.tabContainer}>
+              {/* Tab Navigation + MeskenyGPT entry — collapsed while the
+                  cadastre map is open so the map is full-bleed (uses the same
+                  hide pattern as the other headers; the map's own overlay +
+                  "Back to list" button drive navigation there). */}
+              <View
+                style={[
+                  styles.tabContainer,
+                  cadastreMapOpen && {
+                    height: 0,
+                    opacity: 0,
+                    overflow: "hidden",
+                    pointerEvents: "none",
+                  },
+                ]}
+              >
                 <View style={styles.tabRow}>
                   {/* Sell Tab - First */}
                   <TouchableOpacity
