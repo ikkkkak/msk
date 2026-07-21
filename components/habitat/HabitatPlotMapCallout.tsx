@@ -153,6 +153,11 @@ export const HabitatPlotCalloutCard = memo(function HabitatPlotCalloutCard({
   );
 
   const subSectorName = useMemo(() => {
+    // Only show a sub-area when the plot ACTUALLY belongs to one
+    // (sub_sector_id set). Parent-sector plots can still carry a
+    // sub_sector_code derived from the dual-purpose il_value, so keying off
+    // the code alone wrongly labelled top-level plots with a sub-area.
+    if (plot.sub_sector_id == null) return "";
     const s = plot.sub_sector;
     const name = localizedHabitatName(isRtl, s?.name, s?.name_ar);
     return (name || plot.sub_sector_code || "").trim();
